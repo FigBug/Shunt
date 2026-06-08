@@ -48,11 +48,11 @@ GameState::GameState (int numPlayers)
     placeInitialCars();
 }
 
-TrackPos GameState::spawnPosNearDropOff (int dropOffIndex) const
+GameState::SpawnInfo GameState::spawnPosNearDropOff (int dropOffIndex) const
 {
     const auto& dropOffs = track.getDropOffs();
     if (dropOffIndex >= (int) dropOffs.size())
-        return { 0, 5.0f };
+        return { { 0, 5.0f }, 1 };
 
     int dzNode = dropOffs[(size_t) dropOffIndex].node;
 
@@ -60,27 +60,27 @@ TrackPos GameState::spawnPosNearDropOff (int dropOffIndex) const
     {
         const auto& seg = track.getSegment (i);
         if (seg.nodeA == dzNode)
-            return { i, juce::jmin (3.0f, seg.length * 0.3f) };
+            return { { i, juce::jmin (3.0f, seg.length * 0.3f) }, 1 };   // dir=1 = away from nodeA (drop-off)
         if (seg.nodeB == dzNode)
-            return { i, seg.length - juce::jmin (3.0f, seg.length * 0.3f) };
+            return { { i, seg.length - juce::jmin (3.0f, seg.length * 0.3f) }, -1 }; // dir=-1 = away from nodeB (drop-off)
     }
 
-    return { 0, 5.0f };
+    return { { 0, 5.0f }, 1 };
 }
 
 void GameState::spawnPlayer (int controllerIndex, int slot)
 {
     int dzIdx = (slot < (int) spawnDropOffOrder.size())
                     ? spawnDropOffOrder[(size_t) slot] : slot;
-    auto startPos = spawnPosNearDropOff (dzIdx);
+    auto spawn = spawnPosNearDropOff (dzIdx);
 
     Player p;
     p.controllerIndex = controllerIndex;
     p.slot   = slot;
     p.colour = kSlotColours[slot];
-    p.pos    = startPos;
-    p.dir    = 1;
-    p.facing = 1;
+    p.pos    = spawn.pos;
+    p.dir    = spawn.dir;
+    p.facing = spawn.dir;
 
     for (auto& existing : players)
     {
@@ -99,15 +99,15 @@ void GameState::spawnAi (int slot)
 {
     int dzIdx = (slot < (int) spawnDropOffOrder.size())
                     ? spawnDropOffOrder[(size_t) slot] : slot;
-    auto startPos = spawnPosNearDropOff (dzIdx);
+    auto spawn = spawnPosNearDropOff (dzIdx);
 
     Player p;
     p.controllerIndex = -1;
     p.slot   = slot;
     p.colour = kSlotColours[slot];
-    p.pos    = startPos;
-    p.dir    = 1;
-    p.facing = 1;
+    p.pos    = spawn.pos;
+    p.dir    = spawn.dir;
+    p.facing = spawn.dir;
 
     p.ai = AiBrain {};
 
@@ -440,16 +440,13 @@ void GameState::checkScoring (Player& p)
             continue;
 
         auto dzPos = track.getNode (dz.node).position;
-        float locoDist = track.worldPos (p.pos).getDistanceFrom (dzPos);
 
-        // Find the leading car (closest to drop-off, closer than engine)
         auto tryScore = [&] (std::vector<int>& list, bool front) -> bool
         {
-            // The last car in the list is the outermost — check from the end
             for (int i = (int) list.size() - 1; i >= 0; --i)
             {
                 float cd = carWorldPos (p, front, i).getDistanceFrom (dzPos);
-                if (cd < kScoreDistance && cd < locoDist)
+                if (cd < kScoreDistance)
                 {
                     int carId = list[(size_t) i];
                     cars.erase (
@@ -606,16 +603,17 @@ void GameState::aiUpdate (Player& p, float dt)
     if (rethink)
         brain.thinkTimer = 0.2f;
 
-    // State transitions
+    // State transitions — always check, not just on rethink
+    if (brain.state == AiBrain::idle)
+    {
+        if (p.totalCars() > 0)
+            brain.state = AiBrain::returningHome;
+        else
+            brain.state = AiBrain::seekingCar;
+    }
+
     if (rethink)
     {
-        if (brain.state == AiBrain::idle)
-        {
-            if (p.totalCars() > 0)
-                brain.state = AiBrain::returningHome;
-            else
-                brain.state = AiBrain::seekingCar;
-        }
 
         // Stuck detection: if we haven't moved much, pick a new target
         auto curWorld = track.worldPos (p.pos);
@@ -815,10 +813,12 @@ void GameState::aiUpdate (Player& p, float dt)
     {
         brain.state = AiBrain::returningHome;
         brain.targetCarId = -1;
+        brain.path.clear();
     }
     else if (brain.state == AiBrain::returningHome && p.totalCars() == 0)
     {
         brain.state = AiBrain::idle;
+        brain.path.clear();
     }
 }
 

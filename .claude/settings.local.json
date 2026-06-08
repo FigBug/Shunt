@@ -40,7 +40,11 @@
       "Bash(curl -sL \"https://lz4.overpass-api.de/api/interpreter\" -H \"Content-Type: application/x-www-form-urlencoded\" --data-urlencode 'data=[out:json][timeout:30];\\(way[\"railway\"=\"rail\"][\"service\"=\"yard\"]\\(40.64,-80.25,40.66,-80.22\\);\\);out body;>;out skel qt;')",
       "Bash(python3 *)",
       "Bash(curl -sL \"https://lz4.overpass-api.de/api/interpreter\" -H \"Content-Type: application/x-www-form-urlencoded\" --data-urlencode 'data=[out:json][timeout:30];\\(way[\"railway\"=\"rail\"]\\(35.247,136.965,35.255,136.975\\);\\);out body;>;out skel qt;')",
-      "Bash(curl -sL \"https://raw.githubusercontent.com/OpenRailAssociation/osrd/dev/tests/data/infras/small_infra/infra.json\" -o /tmp/osrd_small_infra.json)"
+      "Bash(curl -sL \"https://raw.githubusercontent.com/OpenRailAssociation/osrd/dev/tests/data/infras/small_infra/infra.json\" -o /tmp/osrd_small_infra.json)",
+      "Bash(grep -E \"^\\\\-.*\\\\.\\(sh|cmake|json|bat|cmd|ps1\\)$\")",
+      "Bash(git config *)",
+      "Bash(git ls-tree *)",
+      "Bash(find *)"
     ]
   }
 }

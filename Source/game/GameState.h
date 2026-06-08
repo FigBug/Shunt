@@ -37,7 +37,8 @@ private:
     void  checkCoupling   (Player& p);
     void  checkScoring    (Player& p);
     void     placeInitialCars();
-    TrackPos spawnPosNearDropOff (int dropOffIndex) const;
+    struct SpawnInfo { TrackPos pos; int dir; };
+    SpawnInfo spawnPosNearDropOff (int dropOffIndex) const;
     bool  isSwitchOccupied (int switchNode) const;
     float collisionLimit   (const Player& p, int moveDir, float maxDist) const;
 
