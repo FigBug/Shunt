@@ -31,23 +31,40 @@ GameState::GameState (int numPlayers)
     for (int i = 0; i < numPlayers; ++i)
         spawnAi (i);
 
-    spawnCars();
+    placeInitialCars();
+}
+
+TrackPos GameState::spawnPosNearDropOff (int dropOffIndex) const
+{
+    const auto& dropOffs = track.getDropOffs();
+    if (dropOffIndex >= (int) dropOffs.size())
+        return { 0, 5.0f };
+
+    int dzNode = dropOffs[(size_t) dropOffIndex].node;
+
+    for (int i = 0; i < track.numSegments(); ++i)
+    {
+        const auto& seg = track.getSegment (i);
+        if (seg.nodeA == dzNode)
+            return { i, 3.0f };
+        if (seg.nodeB == dzNode)
+            return { i, seg.length - 3.0f };
+    }
+
+    return { 0, 5.0f };
 }
 
 void GameState::spawnPlayer (int controllerIndex, int slot)
 {
-    const auto* siding = track.findSiding (slot);
-    if (siding == nullptr) return;
+    auto startPos = spawnPosNearDropOff (slot);
 
     Player p;
     p.controllerIndex = controllerIndex;
     p.slot   = slot;
     p.colour = kSlotColours[slot];
-
-    const auto& seg = track.getSegment (siding->segment);
-    p.pos = { siding->segment, seg.length * 0.9f };
-    p.dir = -1;
-    p.facing = -1;
+    p.pos    = startPos;
+    p.dir    = 1;
+    p.facing = 1;
 
     for (auto& existing : players)
     {
@@ -64,69 +81,99 @@ void GameState::spawnPlayer (int controllerIndex, int slot)
 
 void GameState::spawnAi (int slot)
 {
-    const auto* siding = track.findSiding (slot);
-    if (siding == nullptr) return;
+    auto startPos = spawnPosNearDropOff (slot);
 
     Player p;
     p.controllerIndex = -1;
     p.slot   = slot;
     p.colour = kSlotColours[slot];
-
-    const auto& seg = track.getSegment (siding->segment);
-    p.pos = { siding->segment, seg.length * 0.9f };
-    p.dir = -1;
-    p.facing = -1;
+    p.pos    = startPos;
+    p.dir    = 1;
+    p.facing = 1;
 
     p.ai = AiBrain {};
 
     players.push_back (std::move (p));
 }
 
-void GameState::spawnCars()
+void GameState::placeInitialCars()
 {
-    int freeCount = 0;
-    for (const auto& c : cars)
-        if (c.free) ++freeCount;
+    // Find dead-end spur segments: reverse segments of switches that end at
+    // a node with only one connected segment (a buffer stop).
+    struct SpurInfo { int segment; int bufferNode; float length; float bufferDist; };
+    std::vector<SpurInfo> spurs;
 
-    while (freeCount < kMaxFreeCars)
+    for (const auto& sw : track.getSwitches())
     {
-        int seg = rng().nextInt (5);
+        int seg = sw.reverseSegment;
         const auto& s = track.getSegment (seg);
-        float dist = rng().nextFloat() * s.length * 0.8f + s.length * 0.1f;
 
-        bool tooClose = false;
-        auto candidatePos = track.worldPos ({ seg, dist });
-        for (const auto& c : cars)
+        // Check both endpoints — a dead-end spur has a node with only 1 segment
+        for (int endpoint : { s.nodeA, s.nodeB })
         {
-            if (! c.free) continue;
-            if (track.worldPos (c.pos).getDistanceFrom (candidatePos) < kCarSpacing * 1.5f)
+            int connections = 0;
+            for (int i = 0; i < track.numSegments(); ++i)
             {
-                tooClose = true;
+                const auto& other = track.getSegment (i);
+                if (other.nodeA == endpoint || other.nodeB == endpoint)
+                    ++connections;
+            }
+
+            if (connections == 1)
+            {
+                float bufferDist = (endpoint == s.nodeB) ? s.length : 0.0f;
+                spurs.push_back ({ seg, endpoint, s.length, bufferDist });
                 break;
             }
         }
-        for (const auto& p : players)
-        {
-            if (track.worldPos (p.pos).getDistanceFrom (candidatePos) < kCarSpacing * 2.0f)
-            {
-                tooClose = true;
-                break;
-            }
-        }
+    }
 
-        if (! tooClose)
+    if (spurs.empty()) return;
+
+    // Build a shuffled list of colours: 5 of each colour = 20 cars
+    std::vector<CarColour> colours;
+    for (int i = 0; i < kInitialCars; ++i)
+        colours.push_back ((CarColour) (i % (int) CarColour::count));
+
+    for (int i = (int) colours.size() - 1; i > 0; --i)
+    {
+        int j = rng().nextInt (i + 1);
+        std::swap (colours[(size_t) i], colours[(size_t) j]);
+    }
+
+    // Distribute cars evenly across all spurs, placed from buffer end inward
+    int numSpurs = (int) spurs.size();
+    std::vector<int> carsPerSpur ((size_t) numSpurs, 0);
+
+    for (int i = 0; i < kInitialCars; ++i)
+        carsPerSpur[(size_t) (i % numSpurs)]++;
+
+    constexpr float kPlaceSpacing = 1.8f;
+
+    int colourIdx = 0;
+    for (int si = 0; si < numSpurs; ++si)
+    {
+        const auto& spur = spurs[(size_t) si];
+        bool bufferAtEnd = (spur.bufferDist > spur.length * 0.5f);
+
+        for (int ci = 0; ci < carsPerSpur[(size_t) si]; ++ci)
         {
+            float dist;
+            if (bufferAtEnd)
+                dist = spur.length - (float) (ci + 1) * kPlaceSpacing;
+            else
+                dist = (float) (ci + 1) * kPlaceSpacing;
+
+            if (dist < kPlaceSpacing || dist > spur.length - kPlaceSpacing)
+                continue;
+
             Car car;
-            car.id   = nextCarId++;
-            car.pos  = { seg, dist };
-            car.dir  = 1;
-            car.free = true;
+            car.id     = nextCarId++;
+            car.colour = colours[(size_t) colourIdx++];
+            car.pos    = { spur.segment, dist };
+            car.dir    = 1;
+            car.free   = true;
             cars.push_back (car);
-            ++freeCount;
-        }
-        else
-        {
-            break;
         }
     }
 }
@@ -175,13 +222,6 @@ void GameState::update (float dt, gin::GameControllerManager& controllers)
         p.prevUncouple = uncouple;
 
         updatePlayer (p, moveDist, toggleEdge, uncoupleEdge);
-    }
-
-    spawnTimer -= dt;
-    if (spawnTimer <= 0.0f)
-    {
-        spawnCars();
-        spawnTimer = kSpawnInterval;
     }
 
     timeRemaining -= dt;
@@ -291,12 +331,21 @@ void GameState::checkCoupling (Player& p)
     {
         if (! c.free) continue;
 
+        if (p.hasColourLock && c.colour != p.carryColour)
+            continue;
+
         auto carWorld = track.worldPos (c.pos);
         float df = nextFrontSlot.getDistanceFrom (carWorld);
         float dr = nextRearSlot.getDistanceFrom (carWorld);
 
         if (df < kCoupleDistance || dr < kCoupleDistance)
         {
+            if (! p.hasColourLock)
+            {
+                p.carryColour = c.colour;
+                p.hasColourLock = true;
+            }
+
             c.free = false;
             if (df <= dr)
                 p.frontCars.push_back (c.id);
@@ -318,15 +367,19 @@ void GameState::checkScoring (Player& p)
 {
     if (p.totalCars() == 0) return;
 
-    const auto* siding = track.findSiding (p.slot);
-    if (siding == nullptr) return;
-
-    auto bufferPos = track.getNode (siding->bufferNode).position;
     auto locoWorld = track.worldPos (p.pos);
 
-    if (locoWorld.getDistanceFrom (bufferPos) < kScoreDistance)
+    for (const auto& dz : track.getDropOffs())
     {
-        p.score += p.totalCars();
+        auto dzPos = track.getNode (dz.node).position;
+        if (locoWorld.getDistanceFrom (dzPos) > kScoreDistance)
+            continue;
+
+        if ((int) p.carryColour != dz.colourIndex)
+            continue;
+
+        int scored = p.totalCars();
+        p.score += scored;
 
         auto removeCars = [&] (std::vector<int>& list)
         {
@@ -340,6 +393,18 @@ void GameState::checkScoring (Player& p)
 
         removeCars (p.frontCars);
         removeCars (p.rearCars);
+        p.hasColourLock = false;
+
+        bool anyCarsLeft = false;
+        for (const auto& c : cars)
+            if (c.free) { anyCarsLeft = true; break; }
+        for (const auto& other : players)
+            if (other.totalCars() > 0) { anyCarsLeft = true; break; }
+
+        if (! anyCarsLeft)
+            gameOver = true;
+
+        return;
     }
 }
 
@@ -524,21 +589,32 @@ void GameState::aiUpdate (Player& p, float dt)
         if (sw.has_value())
         {
             auto* swInfo = track.findSwitch (*sw);
-            if (swInfo != nullptr)
+            if (swInfo != nullptr
+                && swInfo->cooldown <= 0.0f
+                && ! isSwitchOccupied (*sw))
             {
                 const auto* homeSiding = track.findSiding (p.slot);
                 bool isHomeSw = homeSiding && *sw == homeSiding->switchNode;
                 bool onSiding = homeSiding && p.pos.segment == homeSiding->segment;
+                bool onMainLine = track.isMainLine (p.pos.segment);
+
                 bool want = false;
-
                 if (brain.state == AiBrain::seekingCar)
-                    want = isHomeSw && onSiding;
+                {
+                    if (onSiding && isHomeSw)
+                        want = true;
+                    else if (onMainLine)
+                        want = true;
+                }
                 else
-                    want = isHomeSw;
+                {
+                    if (isHomeSw)
+                        want = true;
+                    else if (onMainLine)
+                        want = true;
+                }
 
-                if (swInfo->reversed != want
-                    && swInfo->cooldown <= 0.0f
-                    && ! isSwitchOccupied (*sw))
+                if (swInfo->reversed != want)
                 {
                     swInfo->reversed = want;
                     swInfo->cooldown = 2.0f;

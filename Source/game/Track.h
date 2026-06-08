@@ -49,6 +49,10 @@ public:
     int addSegment (int a, int b);
     void addSwitch (int node, int stem, int normal, int reverse);
     void addSiding (int slot, int segment, int bufferNode, int switchNode);
+    void addDropOff (int colourIndex, int node);
+
+    struct DropOffZone { int colourIndex = 0; int node = 0; };
+    const std::vector<DropOffZone>& getDropOffs() const { return dropOffs; }
 
     int numNodes() const noexcept    { return (int) nodes.size(); }
     int numSegments() const noexcept { return (int) segments.size(); }
@@ -82,12 +86,14 @@ public:
     std::optional<int> nextSwitchAhead (TrackPos pos, int dir) const;
 
     bool isMainLine (int segment) const;
+    std::vector<int> mainLineSegments() const;
 
 private:
     std::vector<TrackNode>    nodes;
     std::vector<TrackSegment> segments;
     std::vector<SwitchInfo>   switches;
     std::vector<SidingInfo>   sidings;
+    std::vector<DropOffZone>  dropOffs;
     int mainLineEnd = -1;
 
     int routeThrough (int fromSeg, int atNode) const;

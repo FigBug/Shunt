@@ -7,9 +7,12 @@
 namespace game
 {
 
+enum class CarColour { red, blue, green, yellow, count };
+
 struct Car
 {
     int id = 0;
+    CarColour colour = CarColour::red;
     TrackPos pos;
     int dir = 1;
     bool free = true;
@@ -39,6 +42,8 @@ struct Player
     std::vector<int> frontCars;
     std::vector<int> rearCars;
     int score = 0;
+    CarColour carryColour = CarColour::red;
+    bool hasColourLock = false;
 
     int totalCars() const noexcept { return (int) frontCars.size() + (int) rearCars.size(); }
 

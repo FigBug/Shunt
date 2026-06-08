@@ -4,6 +4,21 @@
 namespace view
 {
 
+namespace
+{
+    juce::Colour carColourToJuce (game::CarColour c)
+    {
+        switch (c)
+        {
+            case game::CarColour::red:    return juce::Colour::fromRGB (220,  60,  60);
+            case game::CarColour::blue:   return juce::Colour::fromRGB ( 60, 100, 220);
+            case game::CarColour::green:  return juce::Colour::fromRGB ( 50, 180,  70);
+            case game::CarColour::yellow: return juce::Colour::fromRGB (220, 200,  50);
+            default:                      return juce::Colours::grey;
+        }
+    }
+}
+
 GameView::GameView (game::GameState& s) : state (s) {}
 
 void GameView::paint (juce::Graphics& g)
@@ -105,26 +120,18 @@ void GameView::drawSwitches (juce::Graphics& g, const juce::AffineTransform& w2s
             return len > 0.0f ? d / len : juce::Point<float>();
         };
 
-        // Normal: stem ↔ normal.  Reversed: normal ↔ reverse.
-        int segA = sw.reversed ? sw.normalSegment  : sw.stemSegment;
-        int segB = sw.reversed ? sw.reverseSegment : sw.normalSegment;
-
-        auto dA = dirTo (segA);
-        auto dB = dirTo (segB);
+        // The "active branch" is the diverging segment currently connected.
+        // Normal: stem↔normal (through), reverse disconnected.
+        // Reversed: normal↔reverse (branch), stem disconnected.
+        // Show a line from centre toward the branch that is currently active.
+        auto branchDir = dirTo (sw.reversed ? sw.reverseSegment : sw.stemSegment);
 
         bool canToggle = state.canToggleSwitch (sw.node);
         auto colour = canToggle ? juce::Colours::limegreen : juce::Colours::red;
 
-        auto dInactive = dirTo (sw.reversed ? sw.stemSegment : sw.reverseSegment);
-        g.setColour (colour.withAlpha (0.25f));
-        g.drawLine (centre.x, centre.y,
-                    centre.x + dInactive.x * 14.0f, centre.y + dInactive.y * 14.0f, 1.5f);
-
         g.setColour (colour);
         g.drawLine (centre.x, centre.y,
-                    centre.x + dA.x * 14.0f, centre.y + dA.y * 14.0f, 2.5f);
-        g.drawLine (centre.x, centre.y,
-                    centre.x + dB.x * 14.0f, centre.y + dB.y * 14.0f, 2.5f);
+                    centre.x + branchDir.x * 14.0f, centre.y + branchDir.y * 14.0f, 2.5f);
         g.fillEllipse (centre.x - 4.0f, centre.y - 4.0f, 8.0f, 8.0f);
     }
 }
@@ -132,28 +139,19 @@ void GameView::drawSwitches (juce::Graphics& g, const juce::AffineTransform& w2s
 void GameView::drawSidings (juce::Graphics& g, const juce::AffineTransform& w2s) const
 {
     const auto& track = state.getTrack();
-    const juce::Colour kSlotColours[4] {
-        juce::Colour::fromRGB (230,  70,  70),
-        juce::Colour::fromRGB ( 70, 140, 230),
-        juce::Colour::fromRGB ( 80, 200,  90),
-        juce::Colour::fromRGB (240, 200,  60),
-    };
 
-    for (const auto& siding : track.getSidings())
+
+
+    for (const auto& dz : track.getDropOffs())
     {
-        auto bufPos = track.getNode (siding.bufferNode).position;
-        bufPos.applyTransform (w2s);
+        auto dzPos = track.getNode (dz.node).position;
+        dzPos.applyTransform (w2s);
 
-        g.setColour (kSlotColours[siding.playerSlot].withAlpha (0.4f));
-        g.fillEllipse (bufPos.x - 12.0f, bufPos.y - 12.0f, 24.0f, 24.0f);
-
-        g.setColour (kSlotColours[siding.playerSlot]);
-        g.drawEllipse (bufPos.x - 12.0f, bufPos.y - 12.0f, 24.0f, 24.0f, 2.0f);
-
-        g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
-        g.drawText ("P" + juce::String (siding.playerSlot + 1),
-                    (int) (bufPos.x - 10), (int) (bufPos.y - 7), 20, 14,
-                    juce::Justification::centred);
+        auto cc = carColourToJuce ((game::CarColour) dz.colourIndex);
+        g.setColour (cc.withAlpha (0.3f));
+        g.fillRoundedRectangle (dzPos.x - 14.0f, dzPos.y - 14.0f, 28.0f, 28.0f, 6.0f);
+        g.setColour (cc);
+        g.drawRoundedRectangle (dzPos.x - 14.0f, dzPos.y - 14.0f, 28.0f, 28.0f, 6.0f, 2.0f);
     }
 }
 
@@ -176,9 +174,9 @@ void GameView::drawCars (juce::Graphics& g, const juce::AffineTransform& w2s) co
         rect.applyTransform (juce::AffineTransform::rotation (angle)
                                  .translated (pos.x, pos.y));
 
-        g.setColour (juce::Colour::fromRGB (180, 140, 80));
+        g.setColour (carColourToJuce (car.colour));
         g.fillPath (rect);
-        g.setColour (juce::Colour::fromRGB (100, 80, 50));
+        g.setColour (carColourToJuce (car.colour).darker (0.4f));
         g.strokePath (rect, juce::PathStrokeType (1.5f));
     }
 }
@@ -203,9 +201,13 @@ void GameView::drawPlayers (juce::Graphics& g, const juce::AffineTransform& w2s)
                 rect.applyTransform (juce::AffineTransform::rotation (cangle)
                                          .translated (cpos.x, cpos.y));
 
-                g.setColour (p.colour.withAlpha (0.7f));
+                juce::Colour cc = juce::Colours::grey;
+                int carId = list[(size_t) ci];
+                for (const auto& car : state.getCars())
+                    if (car.id == carId) { cc = carColourToJuce (car.colour); break; }
+                g.setColour (cc);
                 g.fillPath (rect);
-                g.setColour (p.colour);
+                g.setColour (cc.darker (0.4f));
                 g.strokePath (rect, juce::PathStrokeType (1.5f));
             }
         };
