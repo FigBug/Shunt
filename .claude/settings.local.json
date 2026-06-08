@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(chmod +x *)",
+      "Bash(git submodule *)",
+      "Bash(cmake --preset xcode)",
+      "Bash(cmake --build Builds/xcode --config Debug)",
+      "Bash(open *)",
+      "Bash(gh secret *)"
+    ]
+  }
+}
