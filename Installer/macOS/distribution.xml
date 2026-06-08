@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+    <title>Shunt</title>
+    <organization>com.socalabs</organization>
+    <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
+    <options customize="never" require-scripts="false" rootVolumeOnly="true"/>
+    <welcome file="welcome.txt" mime-type="text/plain"/>
+
+    <choices-outline>
+        <line choice="com.socalabs.shunt.app"/>
+    </choices-outline>
+
+    <choice id="com.socalabs.shunt.app"
+            title="Shunt"
+            description="Install Shunt to /Applications"
+            visible="true"
+            enabled="false"
+            selected="true">
+        <pkg-ref id="com.socalabs.shunt.app.pkg"/>
+    </choice>
+
+    <pkg-ref id="com.socalabs.shunt.app.pkg" version="0">app.pkg</pkg-ref>
+</installer-gui-script>

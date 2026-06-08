@@ -720,23 +720,50 @@ void GameState::aiUpdate (Player& p, float dt)
     if (brain.path.empty())
         return;
 
-    // Direction: follow the path
-    float throttle = (brain.pathDir == p.dir) ? 1.0f : -1.0f;
+    // Find which path segment we're currently on
+    int pathIdx = 0;
+    for (int i = 0; i < (int) brain.path.size(); ++i)
+        if (brain.path[(size_t) i] == p.pos.segment)
+            { pathIdx = i; break; }
+
+    // Determine direction: where is the next segment in the path?
+    int moveDir = brain.pathDir;
+    if (pathIdx + 1 < (int) brain.path.size())
+    {
+        int nextSeg = brain.path[(size_t) (pathIdx + 1)];
+        const auto& curS = track.getSegment (p.pos.segment);
+        const auto& nxtS = track.getSegment (nextSeg);
+
+        // Find which end of current segment connects to next segment
+        bool nextAtB = (nxtS.nodeA == curS.nodeB || nxtS.nodeB == curS.nodeB);
+        bool nextAtA = (nxtS.nodeA == curS.nodeA || nxtS.nodeB == curS.nodeA);
+
+        if (nextAtB && ! nextAtA)
+            moveDir = 1;   // go toward nodeB
+        else if (nextAtA && ! nextAtB)
+            moveDir = -1;  // go toward nodeA
+        else
+            moveDir = brain.pathDir;
+    }
+    else
+    {
+        // On the target segment — go toward the target position
+        moveDir = (brain.targetPos.distance > p.pos.distance) ? 1 : -1;
+    }
+
+    float throttle = (moveDir == p.dir) ? 1.0f : -1.0f;
     float moveDist = throttle * kTrainSpeed * 0.7f * dt;
 
     // Set switches along the path so the route is clear
     if (rethink && brain.switchCooldown <= 0.0f && brain.path.size() >= 2)
     {
-        // For each consecutive pair of segments in the path, find the shared node
-        // and set the switch so the path is traversable
-        for (size_t pi = 0; pi + 1 < brain.path.size(); ++pi)
+        for (size_t pi = (size_t) juce::jmax (0, pathIdx); pi + 1 < brain.path.size(); ++pi)
         {
             int segA = brain.path[pi];
             int segB = brain.path[pi + 1];
             const auto& sA = track.getSegment (segA);
             const auto& sB = track.getSegment (segB);
 
-            // Find shared node
             int sharedNode = -1;
             if (sA.nodeA == sB.nodeA || sA.nodeA == sB.nodeB) sharedNode = sA.nodeA;
             if (sA.nodeB == sB.nodeA || sA.nodeB == sB.nodeB) sharedNode = sA.nodeB;
@@ -747,12 +774,7 @@ void GameState::aiUpdate (Player& p, float dt)
             if (sw == nullptr) continue;
             if (sw->cooldown > 0.0f || isSwitchOccupied (sharedNode)) continue;
 
-            // The switch must route from segA through sharedNode to segB.
-            // From segA at sharedNode: routeThrough should return segB.
-            // Check if it does with current state; if not, flip it.
             int currentRoute = -1;
-
-            // Simulate: from segA, what does routeThrough give?
             if (segA == sw->stemSegment)
                 currentRoute = sw->reversed ? sw->reverseSegment : sw->normalSegment;
             else if (segA == sw->normalSegment)
@@ -761,9 +783,8 @@ void GameState::aiUpdate (Player& p, float dt)
                 currentRoute = sw->stemSegment;
 
             if (currentRoute == segB)
-                continue; // already correct
+                continue;
 
-            // Try flipping
             sw->reversed = ! sw->reversed;
 
             int newRoute = -1;

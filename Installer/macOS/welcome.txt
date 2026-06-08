@@ -1,0 +1,4 @@
+Shunt by SocaLabs
+===================
+
+This installer places Shunt.app in /Applications.

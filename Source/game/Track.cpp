@@ -490,101 +490,151 @@ TrackGraph::PathResult TrackGraph::findPath (TrackPos startPos, int startDir, Tr
 
     if (startSeg == targetSeg)
     {
-        float targetDist = targetPos.distance;
-        int dir = (targetDist > startPos.distance) ? 1 : -1;
+        int dir = (targetPos.distance > startPos.distance) ? 1 : -1;
         return { { startSeg }, dir };
     }
 
-    // BFS on nodes, ignoring switch states (all edges are traversable)
-    // Build adjacency: node → list of (neighborNode, segmentId)
-    struct Edge { int neighbor; int seg; };
-    std::map<int, std::vector<Edge>> adj;
+    // BFS on segments, respecting switch topology:
+    // At a switch: leg→stem always, stem→either leg. Never leg→leg directly.
+    // At a crossing: paired routes only.
+    // At a plain node: any to any.
 
-    for (int i = 0; i < (int) segments.size(); ++i)
+    auto canTraverse = [&] (int fromSeg, int node, int toSeg) -> bool
     {
-        const auto& s = segments[(size_t) i];
-        adj[s.nodeA].push_back ({ s.nodeB, i });
-        adj[s.nodeB].push_back ({ s.nodeA, i });
-    }
+        if (fromSeg == toSeg) return false;
 
-    // Find the two nodes of the start segment and target segment
-    const auto& ss = segments[(size_t) startSeg];
-    const auto& ts = segments[(size_t) targetSeg];
-
-    // BFS from both ends of start segment
-    struct BfsEntry { int node; int prevNode; int prevSeg; };
-    auto bfs = [&] (int fromNode) -> std::vector<int>
-    {
-        std::map<int, BfsEntry> visited;
-        std::queue<int> q;
-        q.push (fromNode);
-        visited[fromNode] = { fromNode, -1, -1 };
-
-        while (! q.empty())
+        if (const auto* sw = findSwitch (node))
         {
-            int cur = q.front();
-            q.pop();
+            if (fromSeg == sw->stemSegment)
+                return toSeg == sw->normalSegment || toSeg == sw->reverseSegment;
+            if (fromSeg == sw->normalSegment || fromSeg == sw->reverseSegment)
+                return toSeg == sw->stemSegment;
+            return false;
+        }
 
-            // Check if we reached either end of the target segment
-            if (cur == ts.nodeA || cur == ts.nodeB)
+        for (const auto& cr : crossings)
+        {
+            if (cr.node != node) continue;
+            if (fromSeg == cr.pairA1) return toSeg == cr.pairA2;
+            if (fromSeg == cr.pairA2) return toSeg == cr.pairA1;
+            if (fromSeg == cr.pairB1) return toSeg == cr.pairB2;
+            if (fromSeg == cr.pairB2) return toSeg == cr.pairB1;
+            return false;
+        }
+
+        return true;
+    };
+
+    // State: (segment, which end we'll exit from next)
+    // We encode state as (segment * 2 + endIdx) where endIdx 0=nodeA, 1=nodeB
+    int numSegs = (int) segments.size();
+    int numStates = numSegs * 2;
+
+    std::vector<int> prev (numStates, -1);
+    std::vector<bool> visited (numStates, false);
+    std::queue<int> q;
+
+    auto stateId = [&] (int seg, int end) { return seg * 2 + end; };
+
+    // Seed: start segment, both directions
+    auto seedEnd = [&] (int endIdx)
+    {
+        int sid = stateId (startSeg, endIdx);
+        if (! visited[sid]) { visited[sid] = true; prev[sid] = sid; q.push (sid); }
+    };
+    seedEnd (0);
+    seedEnd (1);
+
+    int goalState = -1;
+
+    while (! q.empty())
+    {
+        int cur = q.front(); q.pop();
+        int curSeg = cur / 2;
+        int curEnd = cur % 2;
+
+        const auto& cs = segments[(size_t) curSeg];
+        int exitNode = (curEnd == 0) ? cs.nodeA : cs.nodeB;
+
+        // Try all segments at exitNode
+        for (int i = 0; i < numSegs; ++i)
+        {
+            if (! canTraverse (curSeg, exitNode, i)) continue;
+
+            const auto& ns = segments[(size_t) i];
+            // We entered segment i from exitNode. Which end is the OTHER end?
+            int entryEnd = (ns.nodeA == exitNode) ? 0 : 1;
+            int otherEnd = 1 - entryEnd;
+
+            // State: on segment i, will exit from otherEnd
+            int nid = stateId (i, otherEnd);
+            if (visited[nid]) continue;
+            visited[nid] = true;
+            prev[nid] = cur;
+            q.push (nid);
+
+            if (i == targetSeg)
             {
-                // Trace back path as segment sequence
-                std::vector<int> path;
-                path.push_back (targetSeg);
-                int walk = cur;
-                while (visited[walk].prevSeg >= 0)
-                {
-                    path.push_back (visited[walk].prevSeg);
-                    walk = visited[walk].prevNode;
-                }
-                path.push_back (startSeg);
-                std::reverse (path.begin(), path.end());
-                return path;
+                goalState = nid;
+                goto found;
             }
 
-            for (const auto& e : adj[cur])
+            // Also consider: we enter segment i and DON'T cross it — we reverse.
+            // This lets the AI go: leg→stem→(reverse on stem)→back through switch→other leg
+            int revId = stateId (i, entryEnd);
+            if (! visited[revId])
             {
-                if (visited.count (e.neighbor) == 0)
+                visited[revId] = true;
+                prev[revId] = cur;
+                q.push (revId);
+
+                if (i == targetSeg)
                 {
-                    visited[e.neighbor] = { e.neighbor, cur, e.seg };
-                    q.push (e.neighbor);
+                    goalState = revId;
+                    goto found;
                 }
             }
         }
-        return {};
-    };
+    }
 
-    // Try from both ends of start segment, pick shorter path
-    auto pathA = bfs (ss.nodeA);
-    auto pathB = bfs (ss.nodeB);
-
-    std::vector<int>* best = nullptr;
-    if (! pathA.empty() && (pathB.empty() || pathA.size() <= pathB.size()))
-        best = &pathA;
-    else if (! pathB.empty())
-        best = &pathB;
-
-    if (best == nullptr || best->empty())
+    found:
+    if (goalState < 0)
         return {};
 
-    // Determine first direction: which way to go on startSeg to reach the second segment
-    int firstDir = 1;
-    if (best->size() >= 2)
+    // Trace back
+    std::vector<int> pathSegs;
+    int walk = goalState;
+    while (walk != prev[walk])
     {
-        int nextSeg = (*best)[1];
-        const auto& ns = segments[(size_t) nextSeg];
-        // The shared node between startSeg and nextSeg
+        pathSegs.push_back (walk / 2);
+        walk = prev[walk];
+    }
+    pathSegs.push_back (walk / 2);
+    std::reverse (pathSegs.begin(), pathSegs.end());
+
+    // Remove consecutive duplicates (from reversal states)
+    std::vector<int> cleaned;
+    for (int s : pathSegs)
+        if (cleaned.empty() || cleaned.back() != s)
+            cleaned.push_back (s);
+
+    // First direction
+    int firstDir = 1;
+    if (cleaned.size() >= 2)
+    {
+        const auto& ss = segments[(size_t) startSeg];
+        const auto& ns = segments[(size_t) cleaned[1]];
         if (ns.nodeA == ss.nodeB || ns.nodeB == ss.nodeB)
-            firstDir = 1;  // go toward nodeB
+            firstDir = 1;
         else
-            firstDir = -1; // go toward nodeA
+            firstDir = -1;
     }
     else
     {
         firstDir = (targetPos.distance > startPos.distance) ? 1 : -1;
     }
 
-    return { *best, firstDir };
+    return { cleaned, firstDir };
 }
 
 void buildDefaultYard (TrackGraph& graph)
