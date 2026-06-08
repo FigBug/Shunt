@@ -22,7 +22,6 @@ public:
     const std::vector<Car>&    getCars()    const noexcept { return cars; }
 
     bool  isGameOver()       const noexcept { return gameOver; }
-    float getTimeRemaining() const noexcept { return timeRemaining; }
 
     void spawnPlayer (int controllerIndex, int slot);
     void spawnAi (int slot);
@@ -33,7 +32,7 @@ public:
     bool canToggleSwitch (int switchNode) const;
 
 private:
-    void  updatePlayer    (Player& p, float moveDist, bool toggle, bool uncouple);
+    void  updatePlayer    (Player& p, float moveDist, bool toggleFwd, bool toggleBack, bool uncouple);
     void  aiUpdate        (Player& p, float dt);
     void  checkCoupling   (Player& p);
     void  checkScoring    (Player& p);
@@ -45,13 +44,13 @@ private:
     TrackGraph           track;
     std::vector<Player>  players;
     std::vector<Car>     cars;
+    std::vector<int>     spawnDropOffOrder;
     int                  nextCarId   = 0;
     bool                 gameOver    = false;
-    float                timeRemaining = 300.0f;
 
     static constexpr float kTrainSpeed    = 8.0f;
-    static constexpr float kCarSpacing    = 0.9f;
-    static constexpr float kCoupleDistance = 1.0f;
+    static constexpr float kCarSpacing    = 1.6f;
+    static constexpr float kCoupleDistance = 0.5f;
     static constexpr float kScoreDistance  = 2.5f;
     static constexpr int   kMaxConsist     = 100;
     static constexpr int   kInitialCars    = 20;

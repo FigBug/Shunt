@@ -52,95 +52,90 @@ void GameView::paint (juce::Graphics& g)
     auto w2s = juce::AffineTransform::scale (scale)
                    .translated (offsetX - minX * scale, offsetY - minY * scale);
 
-    drawTrack    (g, w2s);
-    drawSidings  (g, w2s);
-    drawSwitches (g, w2s);
-    drawCars     (g, w2s);
-    drawPlayers  (g, w2s);
+    drawTrack    (g, w2s, scale);
+    drawSidings  (g, w2s, scale);
+    drawSwitches (g, w2s, scale);
+    drawCars     (g, w2s, scale);
+    drawPlayers  (g, w2s, scale);
 }
 
-void GameView::drawTrack (juce::Graphics& g, const juce::AffineTransform& w2s) const
+void GameView::drawTrack (juce::Graphics& g, const juce::AffineTransform& w2s, float s) const
 {
     const auto& track = state.getTrack();
 
     for (int i = 0; i < track.numSegments(); ++i)
     {
         const auto& seg = track.getSegment (i);
-        auto a = track.getNode (seg.nodeA).position;
-        auto b = track.getNode (seg.nodeB).position;
+        float thickness = 0.3f * s;
 
-        a.applyTransform (w2s);
-        b.applyTransform (w2s);
+        g.setColour (juce::Colour::fromRGB (130, 120, 105));
 
-        g.setColour (track.isMainLine (i)
-            ? juce::Colour::fromRGB (140, 130, 110)
-            : juce::Colour::fromRGB (120, 110, 95));
-        g.drawLine (a.x, a.y, b.x, b.y, track.isMainLine (i) ? 6.0f : 4.0f);
-    }
-
-    g.setColour (juce::Colour::fromRGB (90, 85, 75));
-    for (int i = 0; i < track.numSegments(); ++i)
-    {
-        const auto& seg = track.getSegment (i);
-        auto a = track.getNode (seg.nodeA).position;
-        auto b = track.getNode (seg.nodeB).position;
-        a.applyTransform (w2s);
-        b.applyTransform (w2s);
-
-        float dx = b.x - a.x, dy = b.y - a.y;
-        float len = std::sqrt (dx * dx + dy * dy);
-        if (len < 1.0f) continue;
-        float nx = -dy / len, ny = dx / len;
-        float railGap = track.isMainLine (i) ? 2.0f : 1.5f;
-
-        g.drawLine (a.x + nx * railGap, a.y + ny * railGap,
-                    b.x + nx * railGap, b.y + ny * railGap, 1.0f);
-        g.drawLine (a.x - nx * railGap, a.y - ny * railGap,
-                    b.x - nx * railGap, b.y - ny * railGap, 1.0f);
+        if (seg.polyline.size() >= 2)
+        {
+            for (size_t j = 0; j + 1 < seg.polyline.size(); ++j)
+            {
+                auto a = seg.polyline[j];  a.applyTransform (w2s);
+                auto b = seg.polyline[j + 1]; b.applyTransform (w2s);
+                g.drawLine (a.x, a.y, b.x, b.y, thickness);
+            }
+        }
+        else
+        {
+            auto a = track.getNode (seg.nodeA).position; a.applyTransform (w2s);
+            auto b = track.getNode (seg.nodeB).position; b.applyTransform (w2s);
+            g.drawLine (a.x, a.y, b.x, b.y, thickness);
+        }
     }
 }
 
-void GameView::drawSwitches (juce::Graphics& g, const juce::AffineTransform& w2s) const
+void GameView::drawSwitches (juce::Graphics& g, const juce::AffineTransform& w2s, float s) const
 {
     const auto& track = state.getTrack();
 
     for (const auto& sw : track.getSwitches())
     {
         auto centre = track.getNode (sw.node).position;
-        centre.applyTransform (w2s);
 
-        auto dirTo = [&] (int seg) -> juce::Point<float>
+        // Sample a point a short distance along each segment's actual polyline
+        auto sampleAlong = [&] (int seg, float dist) -> juce::Point<float>
         {
             const auto& s = track.getSegment (seg);
-            int other = (s.nodeA == sw.node) ? s.nodeB : s.nodeA;
-            auto target = track.getNode (other).position;
-            target.applyTransform (w2s);
-            auto d = target - centre;
-            float len = d.getDistanceFromOrigin();
-            return len > 0.0f ? d / len : juce::Point<float>();
+            bool fromA = (s.nodeA == sw.node);
+            float d = fromA ? dist : s.length - dist;
+            auto pt = track.worldPos ({ seg, juce::jlimit (0.0f, s.length, d) });
+            pt.applyTransform (w2s);
+            return pt;
         };
 
-        // The "active branch" is the diverging segment currently connected.
-        // Normal: stem↔normal (through), reverse disconnected.
-        // Reversed: normal↔reverse (branch), stem disconnected.
-        // Show a line from centre toward the branch that is currently active.
-        auto branchDir = dirTo (sw.reversed ? sw.reverseSegment : sw.stemSegment);
+        constexpr float kDotRadius  = 0.3f;
+        constexpr float kLegLength  = 1.0f;
+        float sampleDist = kDotRadius + kLegLength;
+
+        auto pStem = sampleAlong (sw.stemSegment, sampleDist);
+        auto pLeg  = sampleAlong (sw.reversed ? sw.reverseSegment : sw.normalSegment, sampleDist);
+        auto pDotStem = sampleAlong (sw.stemSegment, kDotRadius);
+        auto pDotLeg  = sampleAlong (sw.reversed ? sw.reverseSegment : sw.normalSegment, kDotRadius);
+        auto c = centre;
+        c.applyTransform (w2s);
 
         bool canToggle = state.canToggleSwitch (sw.node);
         auto colour = canToggle ? juce::Colours::limegreen : juce::Colours::red;
 
+        float sw_thick = 0.2f * s;
+        float dot_r = kDotRadius * s;
         g.setColour (colour);
-        g.drawLine (centre.x, centre.y,
-                    centre.x + branchDir.x * 14.0f, centre.y + branchDir.y * 14.0f, 2.5f);
-        g.fillEllipse (centre.x - 4.0f, centre.y - 4.0f, 8.0f, 8.0f);
+        g.drawLine (pDotStem.x, pDotStem.y, pStem.x, pStem.y, sw_thick);
+        g.drawLine (pDotLeg.x,  pDotLeg.y,  pLeg.x,  pLeg.y,  sw_thick);
+        g.fillEllipse (c.x - dot_r, c.y - dot_r, dot_r * 2, dot_r * 2);
     }
 }
 
-void GameView::drawSidings (juce::Graphics& g, const juce::AffineTransform& w2s) const
+void GameView::drawSidings (juce::Graphics& g, const juce::AffineTransform& w2s, float s) const
 {
     const auto& track = state.getTrack();
 
-
+    float dzSize = 1.0f * s;
+    float dzRound = 0.4f * s;
 
     for (const auto& dz : track.getDropOffs())
     {
@@ -149,13 +144,15 @@ void GameView::drawSidings (juce::Graphics& g, const juce::AffineTransform& w2s)
 
         auto cc = carColourToJuce ((game::CarColour) dz.colourIndex);
         g.setColour (cc.withAlpha (0.3f));
-        g.fillRoundedRectangle (dzPos.x - 14.0f, dzPos.y - 14.0f, 28.0f, 28.0f, 6.0f);
+        g.fillRoundedRectangle (dzPos.x - dzSize, dzPos.y - dzSize,
+                                dzSize * 2, dzSize * 2, dzRound);
         g.setColour (cc);
-        g.drawRoundedRectangle (dzPos.x - 14.0f, dzPos.y - 14.0f, 28.0f, 28.0f, 6.0f, 2.0f);
+        g.drawRoundedRectangle (dzPos.x - dzSize, dzPos.y - dzSize,
+                                dzSize * 2, dzSize * 2, dzRound, 0.15f * s);
     }
 }
 
-void GameView::drawCars (juce::Graphics& g, const juce::AffineTransform& w2s) const
+void GameView::drawCars (juce::Graphics& g, const juce::AffineTransform& w2s, float s) const
 {
     const auto& track = state.getTrack();
 
@@ -167,7 +164,7 @@ void GameView::drawCars (juce::Graphics& g, const juce::AffineTransform& w2s) co
         pos.applyTransform (w2s);
 
         float angle = track.trackAngle (car.pos, car.dir);
-        float halfW = 10.0f, halfH = 6.0f;
+        float halfW = 0.7f * s, halfH = 0.4f * s;
 
         juce::Path rect;
         rect.addRectangle (-halfW, -halfH, halfW * 2, halfH * 2);
@@ -177,11 +174,11 @@ void GameView::drawCars (juce::Graphics& g, const juce::AffineTransform& w2s) co
         g.setColour (carColourToJuce (car.colour));
         g.fillPath (rect);
         g.setColour (carColourToJuce (car.colour).darker (0.4f));
-        g.strokePath (rect, juce::PathStrokeType (1.5f));
+        g.strokePath (rect, juce::PathStrokeType (0.1f * s));
     }
 }
 
-void GameView::drawPlayers (juce::Graphics& g, const juce::AffineTransform& w2s) const
+void GameView::drawPlayers (juce::Graphics& g, const juce::AffineTransform& w2s, float s) const
 {
     const auto& track = state.getTrack();
 
@@ -195,7 +192,7 @@ void GameView::drawPlayers (juce::Graphics& g, const juce::AffineTransform& w2s)
                 cpos.applyTransform (w2s);
                 float cangle = state.carAngle (p, front, ci);
 
-                float halfW = 10.0f, halfH = 6.0f;
+                float halfW = 0.7f * s, halfH = 0.4f * s;
                 juce::Path rect;
                 rect.addRectangle (-halfW, -halfH, halfW * 2, halfH * 2);
                 rect.applyTransform (juce::AffineTransform::rotation (cangle)
@@ -208,7 +205,7 @@ void GameView::drawPlayers (juce::Graphics& g, const juce::AffineTransform& w2s)
                 g.setColour (cc);
                 g.fillPath (rect);
                 g.setColour (cc.darker (0.4f));
-                g.strokePath (rect, juce::PathStrokeType (1.5f));
+                g.strokePath (rect, juce::PathStrokeType (0.1f * s));
             }
         };
 
@@ -219,12 +216,13 @@ void GameView::drawPlayers (juce::Graphics& g, const juce::AffineTransform& w2s)
         locoWorld.applyTransform (w2s);
         float locoAngle = track.trackAngle (p.pos, p.dir);
 
-        float halfW = 14.0f, halfH = 7.0f;
+        float halfW = 0.7f * s, halfH = 0.4f * s;
+        float nose = 0.15f * s;
         juce::Path loco;
         loco.startNewSubPath (-halfW, -halfH);
-        loco.lineTo (halfW - 3.0f, -halfH);
+        loco.lineTo (halfW - nose, -halfH);
         loco.lineTo (halfW, 0.0f);
-        loco.lineTo (halfW - 3.0f, halfH);
+        loco.lineTo (halfW - nose, halfH);
         loco.lineTo (-halfW, halfH);
         loco.closeSubPath();
         loco.applyTransform (juce::AffineTransform::rotation (locoAngle)
@@ -233,13 +231,15 @@ void GameView::drawPlayers (juce::Graphics& g, const juce::AffineTransform& w2s)
         g.setColour (p.colour);
         g.fillPath (loco);
         g.setColour (juce::Colours::black);
-        g.strokePath (loco, juce::PathStrokeType (1.5f));
+        g.strokePath (loco, juce::PathStrokeType (0.1f * s));
 
-        g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
+        float fontSize = juce::jmax (6.0f, 0.7f * s);
+        g.setFont (juce::FontOptions (fontSize, juce::Font::bold));
         g.setColour (juce::Colours::white);
+        float tw = 1.2f * s, th = 0.8f * s;
         g.drawText ("P" + juce::String (p.slot + 1),
-                    (int) (locoWorld.x - 8), (int) (locoWorld.y - 6), 16, 12,
-                    juce::Justification::centred);
+                    (int) (locoWorld.x - tw * 0.5f), (int) (locoWorld.y - th * 0.5f),
+                    (int) tw, (int) th, juce::Justification::centred);
     }
 }
 

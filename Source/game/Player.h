@@ -23,8 +23,13 @@ struct AiBrain
     enum State { idle, seekingCar, returningHome };
     State state = idle;
     int targetCarId = -1;
+    TrackPos targetPos;
     float thinkTimer = 0.0f;
     float switchCooldown = 0.0f;
+    juce::Point<float> lastPos;
+    int stuckCount = 0;
+    std::vector<int> path;
+    int pathDir = 1;
 };
 
 struct Player
@@ -47,8 +52,11 @@ struct Player
 
     int totalCars() const noexcept { return (int) frontCars.size() + (int) rearCars.size(); }
 
-    bool prevToggle   = false;
-    bool prevUncouple = false;
+    bool prevToggleFwd  = false;
+    bool prevToggleBack = false;
+    bool prevUncouple   = false;
+    bool recoupleLock       = false;
+    float recoupleLockDist  = 0.0f;
 
     std::optional<AiBrain> ai;
 };

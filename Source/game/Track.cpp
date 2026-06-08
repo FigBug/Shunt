@@ -1,5 +1,8 @@
 #include "Track.h"
 #include <cmath>
+#include <algorithm>
+#include <queue>
+#include <map>
 
 namespace game
 {
@@ -13,13 +16,25 @@ int TrackGraph::addNode (juce::Point<float> pos)
 int TrackGraph::addSegment (int a, int b)
 {
     float len = nodes[(size_t) a].position.getDistanceFrom (nodes[(size_t) b].position);
-    segments.push_back ({ a, b, len });
+    segments.push_back ({ a, b, len, {} });
+    return (int) segments.size() - 1;
+}
+
+int TrackGraph::addSegmentWithPolyline (int a, int b,
+                                        std::vector<juce::Point<float>> poly, float len)
+{
+    segments.push_back ({ a, b, len, std::move (poly) });
     return (int) segments.size() - 1;
 }
 
 void TrackGraph::addSwitch (int node, int stem, int normal, int reverse)
 {
-    switches.push_back ({ node, stem, normal, reverse, false });
+    switches.push_back ({ node, stem, normal, reverse, false, 0.0f });
+}
+
+void TrackGraph::addCrossing (int node, int a1, int a2, int b1, int b2)
+{
+    crossings.push_back ({ node, a1, a2, b1, b2 });
 }
 
 void TrackGraph::addSiding (int slot, int segment, int bufferNode, int switchNode)
@@ -35,30 +50,56 @@ void TrackGraph::addDropOff (int colourIndex, int node)
 SwitchInfo* TrackGraph::findSwitch (int node)
 {
     for (auto& sw : switches)
-        if (sw.node == node)
-            return &sw;
+        if (sw.node == node) return &sw;
     return nullptr;
 }
 
 const SwitchInfo* TrackGraph::findSwitch (int node) const
 {
     for (const auto& sw : switches)
-        if (sw.node == node)
-            return &sw;
+        if (sw.node == node) return &sw;
     return nullptr;
 }
 
 const SidingInfo* TrackGraph::findSiding (int slot) const
 {
     for (const auto& s : sidings)
-        if (s.playerSlot == slot)
-            return &s;
+        if (s.playerSlot == slot) return &s;
     return nullptr;
+}
+
+std::vector<int> TrackGraph::segmentsAtNode (int node) const
+{
+    std::vector<int> result;
+    for (int i = 0; i < (int) segments.size(); ++i)
+    {
+        const auto& s = segments[(size_t) i];
+        if (s.nodeA == node || s.nodeB == node)
+            result.push_back (i);
+    }
+    return result;
 }
 
 juce::Point<float> TrackGraph::worldPos (TrackPos pos) const
 {
     const auto& seg = segments[(size_t) pos.segment];
+
+    if (seg.polyline.size() >= 2)
+    {
+        float remaining = pos.distance;
+        for (size_t i = 0; i + 1 < seg.polyline.size(); ++i)
+        {
+            float segLen = seg.polyline[i].getDistanceFrom (seg.polyline[i + 1]);
+            if (remaining <= segLen || i + 2 == seg.polyline.size())
+            {
+                float t = segLen > 0.0f ? juce::jmin (1.0f, remaining / segLen) : 0.0f;
+                return seg.polyline[i] + (seg.polyline[i + 1] - seg.polyline[i]) * t;
+            }
+            remaining -= segLen;
+        }
+        return seg.polyline.back();
+    }
+
     auto a = nodes[(size_t) seg.nodeA].position;
     auto b = nodes[(size_t) seg.nodeB].position;
     float t = seg.length > 0.0f ? pos.distance / seg.length : 0.0f;
@@ -68,12 +109,29 @@ juce::Point<float> TrackGraph::worldPos (TrackPos pos) const
 float TrackGraph::trackAngle (TrackPos pos, int dir) const
 {
     const auto& seg = segments[(size_t) pos.segment];
+
+    if (seg.polyline.size() >= 2)
+    {
+        float remaining = pos.distance;
+        for (size_t i = 0; i + 1 < seg.polyline.size(); ++i)
+        {
+            float segLen = seg.polyline[i].getDistanceFrom (seg.polyline[i + 1]);
+            if (remaining <= segLen || i + 2 == seg.polyline.size())
+            {
+                auto d = seg.polyline[i + 1] - seg.polyline[i];
+                float angle = std::atan2 (d.y, d.x);
+                if (dir < 0) angle += juce::MathConstants<float>::pi;
+                return angle;
+            }
+            remaining -= segLen;
+        }
+    }
+
     auto a = nodes[(size_t) seg.nodeA].position;
     auto b = nodes[(size_t) seg.nodeB].position;
     auto d = b - a;
     float angle = std::atan2 (d.y, d.x);
-    if (dir < 0)
-        angle += juce::MathConstants<float>::pi;
+    if (dir < 0) angle += juce::MathConstants<float>::pi;
     return angle;
 }
 
@@ -87,14 +145,22 @@ int TrackGraph::routeThrough (int fromSeg, int atNode) const
 {
     if (const auto* sw = findSwitch (atNode))
     {
-        // Normal: stem ↔ normal (main through), reverse disconnected
-        // Reversed: normal ↔ reverse (siding connected), stem disconnected
         if (fromSeg == sw->stemSegment)
-            return sw->reversed ? -1 : sw->normalSegment;
+            return sw->reversed ? sw->reverseSegment : sw->normalSegment;
         if (fromSeg == sw->normalSegment)
-            return sw->reversed ? sw->reverseSegment : sw->stemSegment;
+            return sw->stemSegment;
         if (fromSeg == sw->reverseSegment)
-            return sw->reversed ? sw->normalSegment : -1;
+            return sw->stemSegment;
+        return -1;
+    }
+
+    for (const auto& cr : crossings)
+    {
+        if (cr.node != atNode) continue;
+        if (fromSeg == cr.pairA1) return cr.pairA2;
+        if (fromSeg == cr.pairA2) return cr.pairA1;
+        if (fromSeg == cr.pairB1) return cr.pairB2;
+        if (fromSeg == cr.pairB2) return cr.pairB1;
         return -1;
     }
 
@@ -124,28 +190,22 @@ TrackGraph::MoveResult TrackGraph::advance (TrackPos pos, int dir, float dist) c
         float overflow = newDist - seg.length;
         int crossedNode = seg.nodeB;
         int nextSeg = routeThrough (pos.segment, crossedNode);
-
         if (nextSeg < 0)
             return { { pos.segment, seg.length }, dir, true };
-
         const auto& ns = segments[(size_t) nextSeg];
         int newDir = (ns.nodeA == crossedNode) ? 1 : -1;
         float startDist = (newDir > 0) ? 0.0f : ns.length;
-
         return advance ({ nextSeg, startDist }, newDir, overflow);
     }
 
     float overflow = -newDist;
     int crossedNode = seg.nodeA;
     int nextSeg = routeThrough (pos.segment, crossedNode);
-
     if (nextSeg < 0)
         return { { pos.segment, 0.0f }, dir, true };
-
     const auto& ns = segments[(size_t) nextSeg];
     int newDir = (ns.nodeA == crossedNode) ? 1 : -1;
     float startDist = (newDir > 0) ? 0.0f : ns.length;
-
     return advance ({ nextSeg, startDist }, newDir, overflow);
 }
 
@@ -154,7 +214,7 @@ std::optional<int> TrackGraph::nextSwitchAhead (TrackPos pos, int dir) const
     int seg = pos.segment;
     int curDir = dir;
 
-    for (int steps = 0; steps < 20; ++steps)
+    for (int steps = 0; steps < 50; ++steps)
     {
         const auto& s = segments[(size_t) seg];
         int nodeAhead = (curDir > 0) ? s.nodeB : s.nodeA;
@@ -177,11 +237,9 @@ std::optional<int> TrackGraph::nextSwitchAhead (TrackPos pos, int dir) const
 bool TrackGraph::isMainLine (int segment) const
 {
     for (const auto& s : sidings)
-        if (s.segment == segment)
-            return false;
+        if (s.segment == segment) return false;
     for (const auto& sw : switches)
-        if (segment == sw.reverseSegment)
-            return false;
+        if (segment == sw.reverseSegment) return false;
     return true;
 }
 
@@ -189,153 +247,352 @@ std::vector<int> TrackGraph::mainLineSegments() const
 {
     std::vector<int> result;
     for (int i = 0; i < (int) segments.size(); ++i)
-        if (isMainLine (i))
-            result.push_back (i);
+        if (isMainLine (i)) result.push_back (i);
     return result;
+}
+
+std::vector<int> TrackGraph::findBufferEdges() const
+{
+    std::vector<int> result;
+    for (int i = 0; i < (int) segments.size(); ++i)
+    {
+        const auto& seg = segments[(size_t) i];
+        for (int endpoint : { seg.nodeA, seg.nodeB })
+        {
+            int conns = 0;
+            for (const auto& s : segments)
+                if (s.nodeA == endpoint || s.nodeB == endpoint)
+                    ++conns;
+            if (conns == 1)
+            {
+                result.push_back (i);
+                break;
+            }
+        }
+    }
+    return result;
+}
+
+std::vector<int> TrackGraph::findEndpointNodes() const
+{
+    std::vector<int> result;
+    for (int n = 0; n < (int) nodes.size(); ++n)
+    {
+        int conns = 0;
+        for (const auto& s : segments)
+            if (s.nodeA == n || s.nodeB == n)
+                ++conns;
+        if (conns == 1)
+        {
+            bool isBuf = false;
+            for (int si = 0; si < (int) segments.size(); ++si)
+            {
+                const auto& seg = segments[(size_t) si];
+                if ((seg.nodeA == n || seg.nodeB == n) && seg.length < 20.0f)
+                    isBuf = true;
+            }
+            if (! isBuf)
+                result.push_back (n);
+        }
+    }
+    return result;
+}
+
+// ════════════════════════════════════════════════════════════════
+// JSON loader
+// ════════════════════════════════════════════════════════════════
+
+void TrackGraph::loadFromJson (const juce::String& json, float scale)
+{
+    auto root = juce::JSON::parse (json);
+    if (! root.isObject()) return;
+
+    auto nodesArray = *root.getProperty ("nodes", {}).getArray();
+    auto edgesArray = *root.getProperty ("edges", {}).getArray();
+
+    // Map from JSON node id → internal node index
+    std::map<int, int> nodeMap;
+
+    for (const auto& nv : nodesArray)
+    {
+        int jsonId = (int) nv.getProperty ("id", -1);
+        float x = (float) (double) nv.getProperty ("x", 0.0) * scale;
+        float y = (float) (double) nv.getProperty ("y", 0.0) * scale;
+        int idx = addNode ({ x, y });
+        nodeMap[jsonId] = idx;
+    }
+
+    // Map from JSON edge id → internal segment index
+    std::map<int, int> edgeMap;
+
+    for (const auto& ev : edgesArray)
+    {
+        int edgeId = (int) ev.getProperty ("id", -1);
+        int fromId = (int) ev.getProperty ("from", -1);
+        bool bufferEnd = (bool) ev.getProperty ("buffer_end", false);
+        float length = (float) (double) ev.getProperty ("length", 0.0) * scale;
+
+        int toId = -1;
+        if (! ev.getProperty ("to", {}).isVoid())
+            toId = (int) ev.getProperty ("to", -1);
+
+        auto polyArr = *ev.getProperty ("polyline", {}).getArray();
+        std::vector<juce::Point<float>> poly;
+        for (const auto& pt : polyArr)
+        {
+            if (auto* arr = pt.getArray())
+            {
+                float px = (float) (double) (*arr)[0] * scale;
+                float py = (float) (double) (*arr)[1] * scale;
+                poly.push_back ({ px, py });
+            }
+        }
+
+        int nA = nodeMap.count (fromId) ? nodeMap[fromId] : -1;
+        int nB = -1;
+
+        if (toId >= 0 && nodeMap.count (toId))
+        {
+            nB = nodeMap[toId];
+        }
+        else if (bufferEnd && poly.size() >= 2)
+        {
+            auto bufPos = poly.back();
+            nB = addNode (bufPos);
+        }
+        else
+        {
+            continue;
+        }
+
+        if (nA < 0) continue;
+
+        int segIdx = addSegmentWithPolyline (nA, nB, std::move (poly), length);
+        edgeMap[edgeId] = segIdx;
+    }
+
+    // Build switch/crossing info from node degrees and edge tangent angles
+    for (const auto& nv : nodesArray)
+    {
+        int jsonId = (int) nv.getProperty ("id", -1);
+        juce::String kind = nv.getProperty ("kind", "").toString();
+        int degree = (int) nv.getProperty ("degree", 0);
+
+        if (kind != "switch" || degree < 3)
+            continue;
+
+        int nodeIdx = nodeMap[jsonId];
+        auto incident = segmentsAtNode (nodeIdx);
+
+        if ((int) incident.size() < 3)
+            continue;
+
+        auto leavingTangent = [&, scale] (int segIdx) -> juce::Point<float>
+        {
+            const auto& seg = segments[(size_t) segIdx];
+            bool fromA = (seg.nodeA == nodeIdx);
+
+            // Sample a point ~20% along the edge for a robust tangent
+            float sampleDist = juce::jmin (seg.length * 0.2f, 3.0f * scale);
+            auto origin = worldPos ({ segIdx, fromA ? 0.0f : seg.length });
+            auto sample = worldPos ({ segIdx, fromA ? sampleDist : seg.length - sampleDist });
+            auto d = sample - origin;
+
+            float len = d.getDistanceFromOrigin();
+            return len > 0.0f ? d / len : juce::Point<float>();
+        };
+
+        auto dotP = [] (juce::Point<float> a, juce::Point<float> b)
+        { return a.x * b.x + a.y * b.y; };
+
+        if (degree == 3 && (int) incident.size() == 3)
+        {
+            int e0 = incident[0], e1 = incident[1], e2 = incident[2];
+            auto d0 = leavingTangent (e0);
+            auto d1 = leavingTangent (e1);
+            auto d2 = leavingTangent (e2);
+
+            float dot01 = dotP (d0, d1);
+            float dot12 = dotP (d1, d2);
+            float dot02 = dotP (d0, d2);
+
+            // The two LEGS point in similar directions (highest dot).
+            // The remaining edge is the STEM.
+            int stem, leg1, leg2;
+            if (dot01 >= dot12 && dot01 >= dot02)
+                { leg1 = e0; leg2 = e1; stem = e2; }
+            else if (dot12 >= dot01 && dot12 >= dot02)
+                { leg1 = e1; leg2 = e2; stem = e0; }
+            else
+                { leg1 = e0; leg2 = e2; stem = e1; }
+
+            // The "normal" leg forms the straighter path with the stem
+            // (more negative dot = more opposite = straighter).
+            auto dStem = leavingTangent (stem);
+            auto dL1 = leavingTangent (leg1);
+            auto dL2 = leavingTangent (leg2);
+            int normal  = (dotP (dStem, dL1) < dotP (dStem, dL2)) ? leg1 : leg2;
+            int reverse = (normal == leg1) ? leg2 : leg1;
+
+            addSwitch (nodeIdx, stem, normal, reverse);
+        }
+        else if (degree >= 4 && (int) incident.size() >= 4)
+        {
+            // Find best pairing of 4 edges into 2 through-pairs
+            int n = juce::jmin ((int) incident.size(), 4);
+            std::vector<juce::Point<float>> tangents;
+            for (int i = 0; i < n; ++i)
+                tangents.push_back (leavingTangent (incident[(size_t) i]));
+
+            // 3 possible pairings of 4 items
+            int pairings[3][4] = { {0,1,2,3}, {0,2,1,3}, {0,3,1,2} };
+            float bestScore = 1e9f;
+            int bestP = 0;
+
+            for (int p = 0; p < 3; ++p)
+            {
+                float score = dotP (tangents[(size_t) pairings[p][0]],
+                                    tangents[(size_t) pairings[p][1]])
+                            + dotP (tangents[(size_t) pairings[p][2]],
+                                    tangents[(size_t) pairings[p][3]]);
+                if (score < bestScore) { bestScore = score; bestP = p; }
+            }
+
+            addCrossing (nodeIdx,
+                         incident[(size_t) pairings[bestP][0]],
+                         incident[(size_t) pairings[bestP][1]],
+                         incident[(size_t) pairings[bestP][2]],
+                         incident[(size_t) pairings[bestP][3]]);
+        }
+    }
+
+    // Load drop-off zones from JSON
+    if (auto* dropArr = root.getProperty ("drop_offs", {}).getArray())
+    {
+        for (const auto& dv : *dropArr)
+        {
+            int colour = (int) dv.getProperty ("colour", 0);
+            int nodeId = (int) dv.getProperty ("node", -1);
+            if (nodeMap.count (nodeId))
+                addDropOff (colour, nodeMap[nodeId]);
+        }
+    }
+}
+
+// ════════════════════════════════════════════════════════════════
+// Hardcoded yard (fallback)
+// ════════════════════════════════════════════════════════════════
+
+TrackGraph::PathResult TrackGraph::findPath (TrackPos startPos, int startDir, TrackPos targetPos) const
+{
+    int startSeg = startPos.segment;
+    int targetSeg = targetPos.segment;
+
+    if (startSeg == targetSeg)
+    {
+        float targetDist = targetPos.distance;
+        int dir = (targetDist > startPos.distance) ? 1 : -1;
+        return { { startSeg }, dir };
+    }
+
+    // BFS on nodes, ignoring switch states (all edges are traversable)
+    // Build adjacency: node → list of (neighborNode, segmentId)
+    struct Edge { int neighbor; int seg; };
+    std::map<int, std::vector<Edge>> adj;
+
+    for (int i = 0; i < (int) segments.size(); ++i)
+    {
+        const auto& s = segments[(size_t) i];
+        adj[s.nodeA].push_back ({ s.nodeB, i });
+        adj[s.nodeB].push_back ({ s.nodeA, i });
+    }
+
+    // Find the two nodes of the start segment and target segment
+    const auto& ss = segments[(size_t) startSeg];
+    const auto& ts = segments[(size_t) targetSeg];
+
+    // BFS from both ends of start segment
+    struct BfsEntry { int node; int prevNode; int prevSeg; };
+    auto bfs = [&] (int fromNode) -> std::vector<int>
+    {
+        std::map<int, BfsEntry> visited;
+        std::queue<int> q;
+        q.push (fromNode);
+        visited[fromNode] = { fromNode, -1, -1 };
+
+        while (! q.empty())
+        {
+            int cur = q.front();
+            q.pop();
+
+            // Check if we reached either end of the target segment
+            if (cur == ts.nodeA || cur == ts.nodeB)
+            {
+                // Trace back path as segment sequence
+                std::vector<int> path;
+                path.push_back (targetSeg);
+                int walk = cur;
+                while (visited[walk].prevSeg >= 0)
+                {
+                    path.push_back (visited[walk].prevSeg);
+                    walk = visited[walk].prevNode;
+                }
+                path.push_back (startSeg);
+                std::reverse (path.begin(), path.end());
+                return path;
+            }
+
+            for (const auto& e : adj[cur])
+            {
+                if (visited.count (e.neighbor) == 0)
+                {
+                    visited[e.neighbor] = { e.neighbor, cur, e.seg };
+                    q.push (e.neighbor);
+                }
+            }
+        }
+        return {};
+    };
+
+    // Try from both ends of start segment, pick shorter path
+    auto pathA = bfs (ss.nodeA);
+    auto pathB = bfs (ss.nodeB);
+
+    std::vector<int>* best = nullptr;
+    if (! pathA.empty() && (pathB.empty() || pathA.size() <= pathB.size()))
+        best = &pathA;
+    else if (! pathB.empty())
+        best = &pathB;
+
+    if (best == nullptr || best->empty())
+        return {};
+
+    // Determine first direction: which way to go on startSeg to reach the second segment
+    int firstDir = 1;
+    if (best->size() >= 2)
+    {
+        int nextSeg = (*best)[1];
+        const auto& ns = segments[(size_t) nextSeg];
+        // The shared node between startSeg and nextSeg
+        if (ns.nodeA == ss.nodeB || ns.nodeB == ss.nodeB)
+            firstDir = 1;  // go toward nodeB
+        else
+            firstDir = -1; // go toward nodeA
+    }
+    else
+    {
+        firstDir = (targetPos.distance > startPos.distance) ? 1 : -1;
+    }
+
+    return { *best, firstDir };
 }
 
 void buildDefaultYard (TrackGraph& graph)
 {
-    // Large Jinryō-style rail yard:
-    // 2 main through lines, throat junction, 10 sidings in 2 groups of 5.
-    // Upper siding 1 and lower siding 1 are through-tracks reconnecting
-    // to the main lines on the right. The rest are dead-end holding/player sidings.
-    // Players: P1=upper 2, P2=upper 4, P3=lower 2, P4=lower 4.
-
-    // ── Main line 1 (y=0) ──
-    int nML1 = graph.addNode ({  -5.0f,  0.0f });
-    int nSA  = graph.addNode ({  20.0f,  0.0f });
-    int nRA  = graph.addNode ({  65.0f,  0.0f });
-    int nMR1 = graph.addNode ({  80.0f,  0.0f });
-
-    // ── Main line 2 (y=3) ──
-    int nML2 = graph.addNode ({  -5.0f,  3.0f });
-    int nSB  = graph.addNode ({  18.0f,  3.0f });
-    int nRB  = graph.addNode ({  65.0f,  3.0f });
-    int nMR2 = graph.addNode ({  80.0f,  3.0f });
-
-    // ── Throat junction ──
-    int nJn  = graph.addNode ({  22.0f,  5.0f });
-
-    // ── Upper lead switches (y 7–15, stepping +2) ──
-    int nU1  = graph.addNode ({  24.0f,  7.0f });
-    int nU2  = graph.addNode ({  26.0f,  9.0f });
-    int nU3  = graph.addNode ({  28.0f, 11.0f });
-    int nU4  = graph.addNode ({  30.0f, 13.0f });
-    int nU5  = graph.addNode ({  32.0f, 15.0f });
-
-    // ── Lower lead switches (y 18–26, stepping +2) ──
-    int nL1  = graph.addNode ({  34.0f, 18.0f });
-    int nL2  = graph.addNode ({  36.0f, 20.0f });
-    int nL3  = graph.addNode ({  38.0f, 22.0f });
-    int nL4  = graph.addNode ({  40.0f, 24.0f });
-    int nL5  = graph.addNode ({  42.0f, 26.0f });
-    int nBot = graph.addNode ({  44.0f, 28.0f });
-
-    // ── Upper siding ends ──
-    int nUT  = graph.addNode ({  63.0f,  7.0f });  // through-track end (reconnects)
-    int nUB2 = graph.addNode ({  75.0f,  9.0f });  // P1 buffer
-    int nUB3 = graph.addNode ({  75.0f, 11.0f });  // holding
-    int nUB4 = graph.addNode ({  75.0f, 13.0f });  // P2 buffer
-    int nUB5 = graph.addNode ({  75.0f, 15.0f });  // holding
-
-    // ── Lower siding ends ──
-    int nLT  = graph.addNode ({  63.0f, 18.0f });  // through-track end (reconnects)
-    int nLB2 = graph.addNode ({  75.0f, 20.0f });  // P3 buffer
-    int nLB3 = graph.addNode ({  75.0f, 22.0f });  // holding
-    int nLB4 = graph.addNode ({  75.0f, 24.0f });  // P4 buffer
-    int nLB5 = graph.addNode ({  75.0f, 26.0f });  // holding
-
-    // ════════════ Segments ════════════
-
-    // Main line 1
-    int smL1  = graph.addSegment (nML1, nSA);
-    int smM1  = graph.addSegment (nSA,  nRA);
-    int smR1  = graph.addSegment (nRA,  nMR1);
-
-    // Main line 2
-    int smL2  = graph.addSegment (nML2, nSB);
-    int smM2  = graph.addSegment (nSB,  nRB);
-    int smR2  = graph.addSegment (nRB,  nMR2);
-
-    // Throat diagonals
-    int sdA   = graph.addSegment (nSA, nJn);   // SA → Jn
-    int sdB   = graph.addSegment (nSB, nJn);   // SB → Jn
-
-    // Lead: Jn → upper switches → lower switches → bottom buf
-    int sJ1   = graph.addSegment (nJn, nU1);
-    int sU12  = graph.addSegment (nU1, nU2);
-    int sU23  = graph.addSegment (nU2, nU3);
-    int sU34  = graph.addSegment (nU3, nU4);
-    int sU45  = graph.addSegment (nU4, nU5);
-    int sUL   = graph.addSegment (nU5, nL1);   // upper→lower gap
-    int sL12  = graph.addSegment (nL1, nL2);
-    int sL23  = graph.addSegment (nL2, nL3);
-    int sL34  = graph.addSegment (nL3, nL4);
-    int sL45  = graph.addSegment (nL4, nL5);
-    int sLB   = graph.addSegment (nL5, nBot);
-
-    // Upper sidings (horizontal)
-    int su1   = graph.addSegment (nU1, nUT);    // through track
-    int su2   = graph.addSegment (nU2, nUB2);   // P1
-    int su3   = graph.addSegment (nU3, nUB3);   // holding
-    int su4   = graph.addSegment (nU4, nUB4);   // P2
-    int su5   = graph.addSegment (nU5, nUB5);   // holding
-
-    // Lower sidings (horizontal)
-    int sl1   = graph.addSegment (nL1, nLT);    // through track
-    int sl2   = graph.addSegment (nL2, nLB2);   // P3
-    int sl3   = graph.addSegment (nL3, nLB3);   // holding
-    int sl4   = graph.addSegment (nL4, nLB4);   // P4
-    int sl5   = graph.addSegment (nL5, nLB5);   // holding
-
-    // Through-track reconnections (diagonal back to main)
-    int stU   = graph.addSegment (nUT, nRA);    // upper through → main1
-    int stL   = graph.addSegment (nLT, nRB);    // lower through → main2
-
-    // ════════════ Switches ════════════
-    // Normal: stem↔normal, Reversed: normal↔reverse
-
-    // SA: main1 left junction
-    graph.addSwitch (nSA, smL1, smM1, sdA);
-
-    // SB: main2 left junction
-    graph.addSwitch (nSB, smL2, smM2, sdB);
-
-    // Jn: throat — normal = SA feed↔lead, reversed = SB feed↔lead
-    graph.addSwitch (nJn, sdB, sdA, sJ1);
-
-    // Upper siding switches — normal = lead through, reversed = lead↔siding
-    graph.addSwitch (nU1, sU12, sJ1,  su1);
-    graph.addSwitch (nU2, sU23, sU12, su2);
-    graph.addSwitch (nU3, sU34, sU23, su3);
-    graph.addSwitch (nU4, sU45, sU34, su4);
-    graph.addSwitch (nU5, sUL,  sU45, su5);
-
-    // Lower siding switches
-    graph.addSwitch (nL1, sL12, sUL,  sl1);
-    graph.addSwitch (nL2, sL23, sL12, sl2);
-    graph.addSwitch (nL3, sL34, sL23, sl3);
-    graph.addSwitch (nL4, sL45, sL34, sl4);
-    graph.addSwitch (nL5, sLB,  sL45, sl5);
-
-    // RA: main1 right — through track reconnects
-    graph.addSwitch (nRA, smR1, smM1, stU);
-
-    // RB: main2 right — through track reconnects
-    graph.addSwitch (nRB, smR2, smM2, stL);
-
-    // ════════════ Player sidings ════════════
-    graph.addSiding (0, su2, nUB2, nU2);   // P1 = upper siding 2
-    graph.addSiding (1, su4, nUB4, nU4);   // P2 = upper siding 4
-    graph.addSiding (2, sl2, nLB2, nL2);   // P3 = lower siding 2
-    graph.addSiding (3, sl4, nLB4, nL4);   // P4 = lower siding 4
-
-    // ════════════ Drop-off zones (4 colours at 4 main line endpoints) ════════════
-    graph.addDropOff (0, nML1);   // red    — main1 left
-    graph.addDropOff (1, nMR1);   // blue   — main1 right
-    graph.addDropOff (2, nML2);   // green  — main2 left
-    graph.addDropOff (3, nMR2);   // yellow — main2 right
+    // kept as fallback — load JSON for real levels
+    int n0 = graph.addNode ({ -5.0f, 0.0f });
+    int n1 = graph.addNode ({ 40.0f, 0.0f });
+    graph.addSegment (n0, n1);
 }
 
 } // namespace game

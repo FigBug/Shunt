@@ -1,5 +1,4 @@
 #include "Hud.h"
-#include <cmath>
 
 namespace view
 {
@@ -12,70 +11,52 @@ Hud::Hud (const game::GameState& s) : state (s)
 void Hud::paint (juce::Graphics& g)
 {
     const auto area = getLocalBounds().toFloat();
-    const float pad = 12.0f;
+    const float pad = 8.0f;
+    constexpr float barH = 28.0f;
+    constexpr float swatch = 14.0f;
 
-    constexpr float rowH   = 32.0f;
-    constexpr float swatch = 18.0f;
-    const float panelW = 220.0f;
-    const float panelH = pad + rowH * (float) state.getPlayers().size() + pad;
+    int numP = (int) state.getPlayers().size();
+    int freeCars = 0;
+    for (const auto& c : state.getCars())
+        if (c.free) ++freeCars;
+    int totalCoupled = 0;
+    for (const auto& pl : state.getPlayers())
+        totalCoupled += pl.totalCars();
 
-    juce::Rectangle<float> panel { area.getX() + pad, area.getY() + pad, panelW, panelH };
+    float barW = area.getWidth() - pad * 2;
+    juce::Rectangle<float> bar { pad, pad, barW, barH };
     g.setColour (juce::Colour::fromRGBA (0, 0, 0, 160));
-    g.fillRoundedRectangle (panel, 6.0f);
+    g.fillRoundedRectangle (bar, 6.0f);
 
-    float y = panel.getY() + pad;
-    for (size_t i = 0; i < state.getPlayers().size(); ++i)
+    float x = bar.getX() + pad;
+    float cy = bar.getCentreY();
+
+    for (int i = 0; i < numP; ++i)
     {
-        const auto& p = state.getPlayers()[i];
+        const auto& p = state.getPlayers()[(size_t) i];
 
         g.setColour (p.colour);
-        g.fillRoundedRectangle (panel.getX() + pad,
-                                y + (rowH - swatch) * 0.5f,
-                                swatch, swatch, 3.0f);
+        g.fillRoundedRectangle (x, cy - swatch * 0.5f, swatch, swatch, 3.0f);
+        x += swatch + 4.0f;
 
-        g.setFont (juce::FontOptions (18.0f, juce::Font::bold));
+        g.setFont (juce::FontOptions (14.0f, juce::Font::bold));
         g.setColour (juce::Colours::white);
-
-        juce::String label = (p.controllerIndex >= 0 ? "P" : "AI");
-        if (p.controllerIndex >= 0) label += juce::String (p.slot + 1);
-
-        juce::Rectangle<int> textArea {
-            (int) (panel.getX() + pad + swatch + 10.0f),
-            (int) y,
-            (int) (panelW - pad * 2 - swatch - 10.0f),
-            (int) rowH };
-
-        g.drawText (label, textArea, juce::Justification::centredLeft, false);
-
-        g.setFont (juce::FontOptions (14.0f));
-        g.setColour (juce::Colours::white.withAlpha (0.6f));
-        juce::String carText = juce::String (p.totalCars()) + " cars";
-        g.drawText (carText, textArea, juce::Justification::centred, false);
-
-        g.setFont (juce::FontOptions (18.0f, juce::Font::bold));
-        g.setColour (juce::Colours::white);
-        g.drawText (juce::String (p.score), textArea,
-                    juce::Justification::centredRight, false);
-
-        y += rowH;
+        juce::String label = (p.controllerIndex >= 0)
+            ? ("P" + juce::String (p.slot + 1))
+            : "AI";
+        g.drawText (label + ": " + juce::String (p.score),
+                    (int) x, (int) bar.getY(), 70, (int) barH,
+                    juce::Justification::centredLeft);
+        x += 74.0f;
     }
 
-    juce::String timeText;
-    if (state.isGameOver())
-        timeText = "Game Over";
-    else
-        timeText = "Time: " + juce::String ((int) std::ceil (state.getTimeRemaining())) + "s";
-
-    juce::Rectangle<float> timerPanel {
-        area.getRight() - 180.0f - pad, area.getY() + pad, 180.0f, rowH };
-    g.setColour (juce::Colour::fromRGBA (0, 0, 0, 160));
-    g.fillRoundedRectangle (timerPanel, 6.0f);
-
-    g.setFont (juce::FontOptions (16.0f));
-    g.setColour (state.getTimeRemaining() < 30.0f && ! state.isGameOver()
-                     ? juce::Colours::yellow : juce::Colours::white);
-    g.drawText (timeText, timerPanel.toNearestInt().reduced (10, 0),
-                juce::Justification::centredRight, false);
+    g.setFont (juce::FontOptions (14.0f));
+    g.setColour (juce::Colours::white.withAlpha (0.7f));
+    juce::String infoText = state.isGameOver()
+        ? "All delivered!"
+        : (juce::String (freeCars + totalCoupled) + " cars left");
+    g.drawText (infoText, (int) (bar.getRight() - 120.0f), (int) bar.getY(),
+                110, (int) barH, juce::Justification::centredRight);
 
     if (state.isGameOver())
     {
@@ -95,10 +76,10 @@ void Hud::paint (juce::Graphics& g)
             }
         }
 
-        float panW = 300.0f, panH2 = 80.0f;
+        float panW = 300.0f, panH = 80.0f;
         juce::Rectangle<float> over { area.getCentreX() - panW * 0.5f,
-                                      area.getCentreY() - panH2 * 0.5f,
-                                      panW, panH2 };
+                                      area.getCentreY() - panH * 0.5f,
+                                      panW, panH };
         g.setColour (juce::Colour::fromRGBA (0, 0, 0, 220));
         g.fillRoundedRectangle (over, 12.0f);
         g.setColour (juce::Colours::white);

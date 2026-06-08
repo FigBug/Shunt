@@ -16,6 +16,7 @@ struct TrackSegment
 {
     int nodeA = 0, nodeB = 0;
     float length = 0.0f;
+    std::vector<juce::Point<float>> polyline;
 };
 
 struct SwitchInfo
@@ -26,6 +27,13 @@ struct SwitchInfo
     int reverseSegment = 0;
     bool reversed = false;
     float cooldown = 0.0f;
+};
+
+struct CrossingInfo
+{
+    int node = 0;
+    int pairA1 = 0, pairA2 = 0;
+    int pairB1 = 0, pairB2 = 0;
 };
 
 struct TrackPos
@@ -47,11 +55,13 @@ class TrackGraph
 public:
     int addNode (juce::Point<float> pos);
     int addSegment (int a, int b);
+    int addSegmentWithPolyline (int a, int b, std::vector<juce::Point<float>> poly, float len);
     void addSwitch (int node, int stem, int normal, int reverse);
+    void addCrossing (int node, int a1, int a2, int b1, int b2);
     void addSiding (int slot, int segment, int bufferNode, int switchNode);
-    void addDropOff (int colourIndex, int node);
 
     struct DropOffZone { int colourIndex = 0; int node = 0; };
+    void addDropOff (int colourIndex, int node);
     const std::vector<DropOffZone>& getDropOffs() const { return dropOffs; }
 
     int numNodes() const noexcept    { return (int) nodes.size(); }
@@ -60,43 +70,53 @@ public:
     const TrackNode&    getNode (int i) const    { return nodes[(size_t) i]; }
     const TrackSegment& getSegment (int i) const { return segments[(size_t) i]; }
 
-    const std::vector<SwitchInfo>& getSwitches() const { return switches; }
-    std::vector<SwitchInfo>&       getSwitches()       { return switches; }
-    const std::vector<SidingInfo>& getSidings() const  { return sidings; }
+    const std::vector<SwitchInfo>&   getSwitches()  const { return switches; }
+    std::vector<SwitchInfo>&         getSwitches()        { return switches; }
+    const std::vector<CrossingInfo>& getCrossings() const { return crossings; }
+    const std::vector<SidingInfo>&   getSidings()   const { return sidings; }
 
     SwitchInfo*       findSwitch (int node);
     const SwitchInfo* findSwitch (int node) const;
-
     const SidingInfo* findSiding (int slot) const;
 
     juce::Point<float> worldPos (TrackPos pos) const;
     float trackAngle (TrackPos pos, int dir) const;
 
-    struct MoveResult
-    {
-        TrackPos pos;
-        int dir = 1;
-        bool stopped = false;
-    };
-
+    struct MoveResult { TrackPos pos; int dir = 1; bool stopped = false; };
     MoveResult advance (TrackPos pos, int dir, float dist) const;
 
     int nodeAtEnd (int segment, int whichEnd) const;
-
     std::optional<int> nextSwitchAhead (TrackPos pos, int dir) const;
 
     bool isMainLine (int segment) const;
     std::vector<int> mainLineSegments() const;
 
+    // BFS pathfinding ignoring switch states. Returns sequence of segments from
+    // the segment containing startPos to the segment containing targetPos.
+    // Empty if no path or already on the same segment.
+    struct PathResult
+    {
+        std::vector<int> segments;
+        int firstDir = 1; // direction to go on the first segment
+    };
+    PathResult findPath (TrackPos startPos, int startDir, TrackPos targetPos) const;
+
+    void loadFromJson (const juce::String& json, float scale = 1.0f);
+
+    std::vector<int> findBufferEdges() const;
+    std::vector<int> findEndpointNodes() const;
+
 private:
     std::vector<TrackNode>    nodes;
     std::vector<TrackSegment> segments;
     std::vector<SwitchInfo>   switches;
+    std::vector<CrossingInfo> crossings;
     std::vector<SidingInfo>   sidings;
     std::vector<DropOffZone>  dropOffs;
     int mainLineEnd = -1;
 
     int routeThrough (int fromSeg, int atNode) const;
+    std::vector<int> segmentsAtNode (int node) const;
 
     friend void buildDefaultYard (TrackGraph& graph);
 };

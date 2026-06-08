@@ -1,4 +1,5 @@
 #include "GameState.h"
+#include "BinaryData.h"
 #include <gin_controllers/gin_controllers.h>
 #include <algorithm>
 #include <cmath>
@@ -11,10 +12,10 @@ namespace
     constexpr int kMaxPlayers = 4;
 
     const juce::Colour kSlotColours[kMaxPlayers] {
-        juce::Colour::fromRGB (230,  70,  70),
-        juce::Colour::fromRGB ( 70, 140, 230),
-        juce::Colour::fromRGB ( 80, 200,  90),
-        juce::Colour::fromRGB (240, 200,  60),
+        juce::Colour::fromRGB (255, 140,   0),   // orange
+        juce::Colour::fromRGB (180,  50, 200),   // purple
+        juce::Colour::fromRGB (  0, 200, 200),   // cyan
+        juce::Colour::fromRGB (200, 200, 200),   // white/silver
     };
 
     juce::Random& rng()
@@ -26,7 +27,20 @@ namespace
 
 GameState::GameState (int numPlayers)
 {
-    buildDefaultYard (track);
+    auto jsonStr = juce::String::fromUTF8 (BinaryData::railgraph_json,
+                                            BinaryData::railgraph_jsonSize);
+    if (jsonStr.isNotEmpty())
+        track.loadFromJson (jsonStr, 0.04f);
+    else
+        buildDefaultYard (track);
+
+    // Shuffle drop-off assignments so each engine starts at a different one
+    int numDZ = (int) track.getDropOffs().size();
+    for (int i = 0; i < numDZ; ++i)
+        spawnDropOffOrder.push_back (i);
+    for (int i = numDZ - 1; i > 0; --i)
+        std::swap (spawnDropOffOrder[(size_t) i],
+                   spawnDropOffOrder[(size_t) rng().nextInt (i + 1)]);
 
     for (int i = 0; i < numPlayers; ++i)
         spawnAi (i);
@@ -46,9 +60,9 @@ TrackPos GameState::spawnPosNearDropOff (int dropOffIndex) const
     {
         const auto& seg = track.getSegment (i);
         if (seg.nodeA == dzNode)
-            return { i, 3.0f };
+            return { i, juce::jmin (3.0f, seg.length * 0.3f) };
         if (seg.nodeB == dzNode)
-            return { i, seg.length - 3.0f };
+            return { i, seg.length - juce::jmin (3.0f, seg.length * 0.3f) };
     }
 
     return { 0, 5.0f };
@@ -56,7 +70,9 @@ TrackPos GameState::spawnPosNearDropOff (int dropOffIndex) const
 
 void GameState::spawnPlayer (int controllerIndex, int slot)
 {
-    auto startPos = spawnPosNearDropOff (slot);
+    int dzIdx = (slot < (int) spawnDropOffOrder.size())
+                    ? spawnDropOffOrder[(size_t) slot] : slot;
+    auto startPos = spawnPosNearDropOff (dzIdx);
 
     Player p;
     p.controllerIndex = controllerIndex;
@@ -81,7 +97,9 @@ void GameState::spawnPlayer (int controllerIndex, int slot)
 
 void GameState::spawnAi (int slot)
 {
-    auto startPos = spawnPosNearDropOff (slot);
+    int dzIdx = (slot < (int) spawnDropOffOrder.size())
+                    ? spawnDropOffOrder[(size_t) slot] : slot;
+    auto startPos = spawnPosNearDropOff (dzIdx);
 
     Player p;
     p.controllerIndex = -1;
@@ -128,6 +146,11 @@ void GameState::placeInitialCars()
         }
     }
 
+    // Remove spurs too short to hold even one car
+    constexpr float kMinSpurLength = 3.0f;
+    spurs.erase (std::remove_if (spurs.begin(), spurs.end(),
+        [] (const SpurInfo& s) { return s.length < kMinSpurLength; }), spurs.end());
+
     if (spurs.empty()) return;
 
     // Build a shuffled list of colours: 5 of each colour = 20 cars
@@ -141,14 +164,32 @@ void GameState::placeInitialCars()
         std::swap (colours[(size_t) i], colours[(size_t) j]);
     }
 
-    // Distribute cars evenly across all spurs, placed from buffer end inward
-    int numSpurs = (int) spurs.size();
-    std::vector<int> carsPerSpur ((size_t) numSpurs, 0);
-
-    for (int i = 0; i < kInitialCars; ++i)
-        carsPerSpur[(size_t) (i % numSpurs)]++;
-
     constexpr float kPlaceSpacing = 1.8f;
+
+    // Calculate max cars per spur based on length
+    int numSpurs = (int) spurs.size();
+    std::vector<int> maxPerSpur ((size_t) numSpurs);
+    int totalCapacity = 0;
+    for (int i = 0; i < numSpurs; ++i)
+    {
+        maxPerSpur[(size_t) i] = juce::jmax (0, (int) ((spurs[(size_t) i].length - kPlaceSpacing) / kPlaceSpacing));
+        totalCapacity += maxPerSpur[(size_t) i];
+    }
+
+    // Randomly assign each car to a spur
+    std::vector<int> carsPerSpur ((size_t) numSpurs, 0);
+    for (int i = 0; i < kInitialCars && i < totalCapacity; ++i)
+    {
+        for (int attempt = 0; attempt < 100; ++attempt)
+        {
+            int si = rng().nextInt (numSpurs);
+            if (carsPerSpur[(size_t) si] < maxPerSpur[(size_t) si])
+            {
+                carsPerSpur[(size_t) si]++;
+                break;
+            }
+        }
+    }
 
     int colourIdx = 0;
     for (int si = 0; si < numSpurs; ++si)
@@ -166,6 +207,8 @@ void GameState::placeInitialCars()
 
             if (dist < kPlaceSpacing || dist > spur.length - kPlaceSpacing)
                 continue;
+
+            if (colourIdx >= (int) colours.size()) break;
 
             Car car;
             car.id     = nextCarId++;
@@ -213,26 +256,23 @@ void GameState::update (float dt, gin::GameControllerManager& controllers)
 
         float moveDist = throttle * kTrainSpeed * dt;
 
-        bool toggle   = c->isButtonDown (B::faceDown);
-        bool uncouple = c->isButtonDown (B::faceRight);
+        bool toggleFwd  = c->isButtonDown (B::faceDown);    // A = switch ahead
+        bool toggleBack = c->isButtonDown (B::faceRight);   // B = switch behind
+        bool uncouple   = c->isButtonDown (B::faceUp);      // Y = decouple
 
-        bool toggleEdge   = toggle   && ! p.prevToggle;
-        bool uncoupleEdge = uncouple && ! p.prevUncouple;
-        p.prevToggle   = toggle;
-        p.prevUncouple = uncouple;
+        bool toggleFwdEdge  = toggleFwd  && ! p.prevToggleFwd;
+        bool toggleBackEdge = toggleBack && ! p.prevToggleBack;
+        bool uncoupleEdge   = uncouple   && ! p.prevUncouple;
+        p.prevToggleFwd  = toggleFwd;
+        p.prevToggleBack = toggleBack;
+        p.prevUncouple   = uncouple;
 
-        updatePlayer (p, moveDist, toggleEdge, uncoupleEdge);
+        updatePlayer (p, moveDist, toggleFwdEdge, toggleBackEdge, uncoupleEdge);
     }
 
-    timeRemaining -= dt;
-    if (timeRemaining <= 0.0f)
-    {
-        timeRemaining = 0.0f;
-        gameOver = true;
-    }
 }
 
-void GameState::updatePlayer (Player& p, float moveDist, bool toggle, bool uncouple)
+void GameState::updatePlayer (Player& p, float moveDist, bool toggleFwd, bool toggleBack, bool uncouple)
 {
     if (std::abs (moveDist) > 0.001f)
     {
@@ -275,12 +315,24 @@ void GameState::updatePlayer (Player& p, float moveDist, bool toggle, bool uncou
             p.dir = forward ? result.dir : -result.dir;
             p.facing = p.dir;
             p.lastMoveDir = result.dir;
+            if (p.recoupleLock)
+            {
+                p.recoupleLockDist += dist;
+                if (p.recoupleLockDist > kCarSpacing * 2.0f)
+                    p.recoupleLock = false;
+            }
         }
     }
 
-    if (toggle)
+    auto tryToggle = [&] (int searchDir)
     {
-        auto switchNode = track.nextSwitchAhead (p.pos, p.lastMoveDir);
+        // Search from the end of the consist in that direction
+        int numCars = (searchDir == p.dir) ? (int) p.frontCars.size()
+                                           : (int) p.rearCars.size();
+        float offset = (float) numCars * kCarSpacing;
+        auto endPos = track.advance (p.pos, searchDir, offset);
+        auto switchNode = track.nextSwitchAhead (endPos.pos, endPos.dir);
+
         if (switchNode.has_value())
         {
             if (auto* sw = track.findSwitch (*switchNode))
@@ -288,29 +340,41 @@ void GameState::updatePlayer (Player& p, float moveDist, bool toggle, bool uncou
                 if (sw->cooldown <= 0.0f && ! isSwitchOccupied (*switchNode))
                 {
                     sw->reversed = ! sw->reversed;
-                    sw->cooldown = 2.0f;
+                    sw->cooldown = 0.5f;
                 }
             }
         }
-    }
+    };
 
-    if (uncouple)
+    if (toggleFwd)  tryToggle (p.dir);
+    if (toggleBack) tryToggle (-p.dir);
+
+    if (uncouple && p.totalCars() > 0)
     {
-        auto dropCar = [] (std::vector<int>& list, std::vector<Car>& allCars,
-                           TrackPos pos, int dir)
+        auto dropAll = [&] (std::vector<int>& list, int dropDir)
         {
-            if (list.empty()) return;
-            int carId = list.back();
-            list.pop_back();
-            for (auto& c : allCars)
-                if (c.id == carId)
-                    { c.free = true; c.pos = pos; c.dir = dir; break; }
+            for (int i = 0; i < (int) list.size(); ++i)
+            {
+                float offset = (float) (i + 1) * kCarSpacing;
+                auto dropPos = track.advance (p.pos, dropDir, offset);
+
+                for (auto& c : cars)
+                    if (c.id == list[(size_t) i])
+                    {
+                        c.free = true;
+                        c.pos = dropPos.pos;
+                        c.dir = dropPos.dir;
+                        break;
+                    }
+            }
+            list.clear();
         };
 
-        if (! p.rearCars.empty())
-            dropCar (p.rearCars, cars, p.pos, p.dir);
-        else
-            dropCar (p.frontCars, cars, p.pos, p.dir);
+        dropAll (p.frontCars, p.dir);
+        dropAll (p.rearCars, -p.dir);
+        p.hasColourLock = false;
+        p.recoupleLock = true;
+        p.recoupleLockDist = 0.0f;
     }
 
     checkCoupling (p);
@@ -320,6 +384,9 @@ void GameState::updatePlayer (Player& p, float moveDist, bool toggle, bool uncou
 void GameState::checkCoupling (Player& p)
 {
     if (p.totalCars() >= kMaxConsist)
+        return;
+
+    if (p.recoupleLock)
         return;
 
     auto nextFrontSlot = track.worldPos (
@@ -367,44 +434,52 @@ void GameState::checkScoring (Player& p)
 {
     if (p.totalCars() == 0) return;
 
-    auto locoWorld = track.worldPos (p.pos);
-
     for (const auto& dz : track.getDropOffs())
     {
-        auto dzPos = track.getNode (dz.node).position;
-        if (locoWorld.getDistanceFrom (dzPos) > kScoreDistance)
-            continue;
-
         if ((int) p.carryColour != dz.colourIndex)
             continue;
 
-        int scored = p.totalCars();
-        p.score += scored;
+        auto dzPos = track.getNode (dz.node).position;
+        float locoDist = track.worldPos (p.pos).getDistanceFrom (dzPos);
 
-        auto removeCars = [&] (std::vector<int>& list)
+        // Find the leading car (closest to drop-off, closer than engine)
+        auto tryScore = [&] (std::vector<int>& list, bool front) -> bool
         {
-            for (int carId : list)
-                cars.erase (
-                    std::remove_if (cars.begin(), cars.end(),
-                        [carId] (const Car& c) { return c.id == carId; }),
-                    cars.end());
-            list.clear();
+            // The last car in the list is the outermost — check from the end
+            for (int i = (int) list.size() - 1; i >= 0; --i)
+            {
+                float cd = carWorldPos (p, front, i).getDistanceFrom (dzPos);
+                if (cd < kScoreDistance && cd < locoDist)
+                {
+                    int carId = list[(size_t) i];
+                    cars.erase (
+                        std::remove_if (cars.begin(), cars.end(),
+                            [carId] (const Car& c) { return c.id == carId; }),
+                        cars.end());
+                    list.erase (list.begin() + i);
+                    p.score++;
+                    return true;
+                }
+            }
+            return false;
         };
 
-        removeCars (p.frontCars);
-        removeCars (p.rearCars);
-        p.hasColourLock = false;
+        if (tryScore (p.frontCars, true) || tryScore (p.rearCars, false))
+        {
+            if (p.totalCars() == 0)
+                p.hasColourLock = false;
 
-        bool anyCarsLeft = false;
-        for (const auto& c : cars)
-            if (c.free) { anyCarsLeft = true; break; }
-        for (const auto& other : players)
-            if (other.totalCars() > 0) { anyCarsLeft = true; break; }
+            bool anyCarsLeft = false;
+            for (const auto& c : cars)
+                if (c.free) { anyCarsLeft = true; break; }
+            for (const auto& other : players)
+                if (other.totalCars() > 0) { anyCarsLeft = true; break; }
 
-        if (! anyCarsLeft)
-            gameOver = true;
+            if (! anyCarsLeft)
+                gameOver = true;
 
-        return;
+            return;
+        }
     }
 }
 
@@ -461,18 +536,19 @@ float GameState::collisionLimit (const Player& p, int moveDir, float maxDist) co
     auto leadPos = track.advance (p.pos, moveDir, leadOffset + kCarSpacing * 0.5f);
     auto leadWorld = track.worldPos (leadPos.pos);
 
-    constexpr float kVehicleHalf = 0.5f;
+    constexpr float kMinGap = 0.8f;
 
+    auto checkVehicle = [&] (juce::Point<float> vw)
+    {
+        float gap = leadWorld.getDistanceFrom (vw) - kMinGap;
+        if (gap < maxDist)
+            maxDist = juce::jmax (0.0f, gap);
+    };
+
+    // Check other players' engines and coupled cars
     for (const auto& other : players)
     {
         if (&other == &p) continue;
-
-        auto checkVehicle = [&] (juce::Point<float> vw)
-        {
-            float gap = leadWorld.getDistanceFrom (vw) - kVehicleHalf * kCarSpacing;
-            if (gap < maxDist)
-                maxDist = juce::jmax (0.0f, gap);
-        };
 
         checkVehicle (track.worldPos (other.pos));
 
@@ -481,6 +557,18 @@ float GameState::collisionLimit (const Player& p, int moveDir, float maxDist) co
 
         for (int i = 0; i < (int) other.rearCars.size(); ++i)
             checkVehicle (carWorldPos (other, false, i));
+    }
+
+    // Check free cars on the track
+    for (const auto& c : cars)
+    {
+        if (! c.free) continue;
+
+        // Skip cars of the colour we can couple (we'll couple them, not collide)
+        if (! p.hasColourLock || c.colour == p.carryColour)
+            continue;
+
+        checkVehicle (track.worldPos (c.pos));
     }
 
     return maxDist;
@@ -516,46 +604,75 @@ void GameState::aiUpdate (Player& p, float dt)
 
     bool rethink = brain.thinkTimer <= 0.0f;
     if (rethink)
-        brain.thinkTimer = 0.15f;
+        brain.thinkTimer = 0.2f;
 
-    if (rethink && brain.state == AiBrain::idle)
+    // State transitions
+    if (rethink)
     {
-        if (p.totalCars() > 0)
-            brain.state = AiBrain::returningHome;
+        if (brain.state == AiBrain::idle)
+        {
+            if (p.totalCars() > 0)
+                brain.state = AiBrain::returningHome;
+            else
+                brain.state = AiBrain::seekingCar;
+        }
+
+        // Stuck detection: if we haven't moved much, pick a new target
+        auto curWorld = track.worldPos (p.pos);
+        if (brain.lastPos.getDistanceFrom (curWorld) < 0.5f)
+            brain.stuckCount++;
         else
-            brain.state = AiBrain::seekingCar;
+            brain.stuckCount = 0;
+        brain.lastPos = curWorld;
+
+        if (brain.stuckCount > 15)
+        {
+            brain.targetCarId = -1;
+            brain.stuckCount = 0;
+        }
     }
 
+    // Find target
     juce::Point<float> targetWorld;
     bool hasTarget = false;
 
     if (brain.state == AiBrain::seekingCar)
     {
-        if (rethink)
+        if (rethink && brain.targetCarId < 0)
         {
-            float bestDist = 1e9f;
-            int bestCar = -1;
             auto locoWorld = track.worldPos (p.pos);
+            std::vector<std::pair<float, int>> candidates;
 
             for (const auto& c : cars)
             {
                 if (! c.free) continue;
+                if (p.hasColourLock && c.colour != p.carryColour)
+                    continue;
                 float d = locoWorld.getDistanceFrom (track.worldPos (c.pos));
-                if (d < bestDist)
-                {
-                    bestDist = d;
-                    bestCar  = c.id;
-                }
+                candidates.push_back ({ d, c.id });
             }
 
-            brain.targetCarId = bestCar;
+            if (! candidates.empty())
+            {
+                std::sort (candidates.begin(), candidates.end());
+                int pick = juce::jmin ((int) candidates.size() - 1, rng().nextInt (3));
+                brain.targetCarId = candidates[(size_t) pick].second;
+            }
         }
 
         if (brain.targetCarId >= 0)
         {
             for (const auto& c : cars)
-                if (c.id == brain.targetCarId)
-                    { targetWorld = track.worldPos (c.pos); hasTarget = true; break; }
+                if (c.id == brain.targetCarId && c.free)
+                {
+                    targetWorld = track.worldPos (c.pos);
+                    brain.targetPos = c.pos;
+                    hasTarget = true;
+                    break;
+                }
+
+            if (! hasTarget)
+                brain.targetCarId = -1;
         }
 
         if (! hasTarget)
@@ -563,69 +680,116 @@ void GameState::aiUpdate (Player& p, float dt)
     }
     else if (brain.state == AiBrain::returningHome)
     {
-        const auto* siding = track.findSiding (p.slot);
-        if (siding == nullptr) return;
+        for (const auto& dz : track.getDropOffs())
+        {
+            if (dz.colourIndex == (int) p.carryColour)
+            {
+                int dzNode = dz.node;
+                targetWorld = track.getNode (dzNode).position;
+                // Find a segment touching this node and create a TrackPos
+                for (int si = 0; si < track.numSegments(); ++si)
+                {
+                    const auto& seg = track.getSegment (si);
+                    if (seg.nodeA == dzNode)
+                        { brain.targetPos = { si, 0.0f }; break; }
+                    if (seg.nodeB == dzNode)
+                        { brain.targetPos = { si, seg.length }; break; }
+                }
+                hasTarget = true;
+                break;
+            }
+        }
 
-        targetWorld = track.getNode (siding->bufferNode).position;
-        hasTarget = true;
+        if (! hasTarget)
+            return;
     }
 
     if (! hasTarget)
         return;
 
     auto locoWorld = track.worldPos (p.pos);
-    float fwdAngle = track.trackAngle (p.pos, p.dir);
-    juce::Point<float> fwdDir (std::cos (fwdAngle), std::sin (fwdAngle));
-    auto diff = targetWorld - locoWorld;
-    float dot = fwdDir.x * diff.x + fwdDir.y * diff.y;
 
-    float throttle = dot > 0.0f ? 1.0f : -1.0f;
+    // Find path to target
+    if (rethink)
+    {
+        auto result = track.findPath (p.pos, p.dir, brain.targetPos);
+        brain.path = std::move (result.segments);
+        brain.pathDir = result.firstDir;
+    }
+
+    if (brain.path.empty())
+        return;
+
+    // Direction: follow the path
+    float throttle = (brain.pathDir == p.dir) ? 1.0f : -1.0f;
     float moveDist = throttle * kTrainSpeed * 0.7f * dt;
 
-    if (rethink && brain.switchCooldown <= 0.0f)
+    // Set switches along the path so the route is clear
+    if (rethink && brain.switchCooldown <= 0.0f && brain.path.size() >= 2)
     {
-        int lookDir = throttle > 0.0f ? p.dir : -p.dir;
-        auto sw = track.nextSwitchAhead (p.pos, lookDir);
-        if (sw.has_value())
+        // For each consecutive pair of segments in the path, find the shared node
+        // and set the switch so the path is traversable
+        for (size_t pi = 0; pi + 1 < brain.path.size(); ++pi)
         {
-            auto* swInfo = track.findSwitch (*sw);
-            if (swInfo != nullptr
-                && swInfo->cooldown <= 0.0f
-                && ! isSwitchOccupied (*sw))
+            int segA = brain.path[pi];
+            int segB = brain.path[pi + 1];
+            const auto& sA = track.getSegment (segA);
+            const auto& sB = track.getSegment (segB);
+
+            // Find shared node
+            int sharedNode = -1;
+            if (sA.nodeA == sB.nodeA || sA.nodeA == sB.nodeB) sharedNode = sA.nodeA;
+            if (sA.nodeB == sB.nodeA || sA.nodeB == sB.nodeB) sharedNode = sA.nodeB;
+
+            if (sharedNode < 0) continue;
+
+            auto* sw = track.findSwitch (sharedNode);
+            if (sw == nullptr) continue;
+            if (sw->cooldown > 0.0f || isSwitchOccupied (sharedNode)) continue;
+
+            // The switch must route from segA through sharedNode to segB.
+            // From segA at sharedNode: routeThrough should return segB.
+            // Check if it does with current state; if not, flip it.
+            int currentRoute = -1;
+
+            // Simulate: from segA, what does routeThrough give?
+            if (segA == sw->stemSegment)
+                currentRoute = sw->reversed ? sw->reverseSegment : sw->normalSegment;
+            else if (segA == sw->normalSegment)
+                currentRoute = sw->stemSegment;
+            else if (segA == sw->reverseSegment)
+                currentRoute = sw->stemSegment;
+
+            if (currentRoute == segB)
+                continue; // already correct
+
+            // Try flipping
+            sw->reversed = ! sw->reversed;
+
+            int newRoute = -1;
+            if (segA == sw->stemSegment)
+                newRoute = sw->reversed ? sw->reverseSegment : sw->normalSegment;
+            else if (segA == sw->normalSegment)
+                newRoute = sw->stemSegment;
+            else if (segA == sw->reverseSegment)
+                newRoute = sw->stemSegment;
+
+            if (newRoute == segB)
             {
-                const auto* homeSiding = track.findSiding (p.slot);
-                bool isHomeSw = homeSiding && *sw == homeSiding->switchNode;
-                bool onSiding = homeSiding && p.pos.segment == homeSiding->segment;
-                bool onMainLine = track.isMainLine (p.pos.segment);
-
-                bool want = false;
-                if (brain.state == AiBrain::seekingCar)
-                {
-                    if (onSiding && isHomeSw)
-                        want = true;
-                    else if (onMainLine)
-                        want = true;
-                }
-                else
-                {
-                    if (isHomeSw)
-                        want = true;
-                    else if (onMainLine)
-                        want = true;
-                }
-
-                if (swInfo->reversed != want)
-                {
-                    swInfo->reversed = want;
-                    swInfo->cooldown = 2.0f;
-                    brain.switchCooldown = 0.5f;
-                }
+                sw->cooldown = 0.5f;
+                brain.switchCooldown = 0.3f;
+                break;
+            }
+            else
+            {
+                sw->reversed = ! sw->reversed; // revert
             }
         }
     }
 
-    updatePlayer (p, moveDist, false, false);
+    updatePlayer (p, moveDist, false, false, false);
 
+    // State transitions after movement
     if (brain.state == AiBrain::seekingCar && p.totalCars() > 0)
     {
         brain.state = AiBrain::returningHome;

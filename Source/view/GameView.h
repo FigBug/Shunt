@@ -16,11 +16,11 @@ public:
 private:
     game::GameState& state;
 
-    void drawTrack    (juce::Graphics& g, const juce::AffineTransform& w2s) const;
-    void drawSwitches (juce::Graphics& g, const juce::AffineTransform& w2s) const;
-    void drawCars     (juce::Graphics& g, const juce::AffineTransform& w2s) const;
-    void drawPlayers  (juce::Graphics& g, const juce::AffineTransform& w2s) const;
-    void drawSidings  (juce::Graphics& g, const juce::AffineTransform& w2s) const;
+    void drawTrack    (juce::Graphics& g, const juce::AffineTransform& w2s, float s) const;
+    void drawSwitches (juce::Graphics& g, const juce::AffineTransform& w2s, float s) const;
+    void drawCars     (juce::Graphics& g, const juce::AffineTransform& w2s, float s) const;
+    void drawPlayers  (juce::Graphics& g, const juce::AffineTransform& w2s, float s) const;
+    void drawSidings  (juce::Graphics& g, const juce::AffineTransform& w2s, float s) const;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (GameView)
 };

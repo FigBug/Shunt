@@ -9,10 +9,10 @@ namespace view
 namespace
 {
     const juce::Colour kSlotColours[4] {
-        juce::Colour::fromRGB (230,  70,  70),
-        juce::Colour::fromRGB ( 70, 140, 230),
-        juce::Colour::fromRGB ( 80, 200,  90),
-        juce::Colour::fromRGB (240, 200,  60),
+        juce::Colour::fromRGB (255, 140,   0),
+        juce::Colour::fromRGB (180,  50, 200),
+        juce::Colour::fromRGB (  0, 200, 200),
+        juce::Colour::fromRGB (200, 200, 200),
     };
 }
 
