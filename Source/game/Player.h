@@ -20,7 +20,7 @@ struct Car
 
 struct AiBrain
 {
-    enum State { idle, seekingCar, returningHome };
+    enum State { idle, seekingCar, returningHome, leavingDropOff };
     State state = idle;
     int targetCarId = -1;
     TrackPos targetPos;
@@ -30,6 +30,7 @@ struct AiBrain
     int stuckCount = 0;
     std::vector<int> path;
     int pathDir = 1;
+    int lastSeg = -1;
 };
 
 struct Player

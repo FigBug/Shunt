@@ -612,6 +612,32 @@ void GameState::aiUpdate (Player& p, float dt)
             brain.state = AiBrain::seekingCar;
     }
 
+    // Leave drop-off: just drive forward until we've passed a switch
+    if (brain.state == AiBrain::leavingDropOff)
+    {
+        float moveDist = kTrainSpeed * 0.7f * dt;
+        updatePlayer (p, moveDist, false, false, false);
+
+        // Check if we've reached a switch — safe to start seeking
+        auto sw = track.nextSwitchAhead (p.pos, p.dir);
+        auto swBack = track.nextSwitchAhead (p.pos, -p.dir);
+        bool pastSwitch = false;
+        if (sw.has_value())
+        {
+            auto swPos = track.getNode (*sw).position;
+            if (track.worldPos (p.pos).getDistanceFrom (swPos) < 2.0f)
+                pastSwitch = true;
+        }
+        // Also transition if stuck
+        brain.stuckCount++;
+        if (pastSwitch || brain.stuckCount > 30)
+        {
+            brain.state = AiBrain::idle;
+            brain.stuckCount = 0;
+        }
+        return;
+    }
+
     if (rethink)
     {
 
@@ -707,8 +733,11 @@ void GameState::aiUpdate (Player& p, float dt)
 
     auto locoWorld = track.worldPos (p.pos);
 
-    // Find path to target
-    if (rethink)
+    // Re-path when we reach a new segment or have no path
+    bool segChanged = (p.pos.segment != brain.lastSeg);
+    brain.lastSeg = p.pos.segment;
+
+    if (brain.path.empty() || segChanged)
     {
         auto result = track.findPath (p.pos, p.dir, brain.targetPos);
         brain.path = std::move (result.segments);
@@ -718,7 +747,6 @@ void GameState::aiUpdate (Player& p, float dt)
     if (brain.path.empty())
         return;
 
-    // Find which path segment we're currently on
     int pathIdx = 0;
     for (int i = 0; i < (int) brain.path.size(); ++i)
         if (brain.path[(size_t) i] == p.pos.segment)
@@ -753,7 +781,7 @@ void GameState::aiUpdate (Player& p, float dt)
     float moveDist = throttle * kTrainSpeed * 0.7f * dt;
 
     // Set switches along the path so the route is clear
-    if (rethink && brain.switchCooldown <= 0.0f && brain.path.size() >= 2)
+    if ((segChanged || brain.switchCooldown <= 0.0f) && brain.path.size() >= 2 && brain.switchCooldown <= 0.0f)
     {
         for (size_t pi = (size_t) juce::jmax (0, pathIdx); pi + 1 < brain.path.size(); ++pi)
         {
@@ -817,8 +845,9 @@ void GameState::aiUpdate (Player& p, float dt)
     }
     else if (brain.state == AiBrain::returningHome && p.totalCars() == 0)
     {
-        brain.state = AiBrain::idle;
+        brain.state = AiBrain::leavingDropOff;
         brain.path.clear();
+        brain.stuckCount = 0;
     }
 }
 
