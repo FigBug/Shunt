@@ -503,6 +503,9 @@ TrackGraph::PathResult TrackGraph::findPath (TrackPos startPos, int startDir, Tr
     {
         if (fromSeg == toSeg) return false;
 
+        const auto& ts = segments[(size_t) toSeg];
+        if (ts.nodeA != node && ts.nodeB != node) return false;
+
         if (const auto* sw = findSwitch (node))
         {
             if (fromSeg == sw->stemSegment)

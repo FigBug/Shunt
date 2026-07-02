@@ -11,9 +11,8 @@ namespace game
 void PhysicsEngine::clear()
 {
     bodies.clear();
-    joints.clear();
+    edges.clear();
     nextBodyId = 0;
-    nextJointId = 0;
 }
 
 int PhysicsEngine::addBody (int segment, float distance, int dir, float mass, float friction)
@@ -31,7 +30,6 @@ int PhysicsEngine::addBody (int segment, float distance, int dir, float mass, fl
 
 void PhysicsEngine::removeBody (int id)
 {
-    removeJointsForBody (id);
     for (auto& b : bodies)
         if (b.id == id) b.active = false;
 }
@@ -48,221 +46,231 @@ const PhysBody* PhysicsEngine::findBody (int id) const
     return nullptr;
 }
 
-int PhysicsEngine::addJoint (int bodyA, int bodyB, float restLength)
+void PhysicsEngine::computeEdges (const TrackGraph& track, size_t index)
 {
-    PhysJoint j;
-    j.id = nextJointId++;
-    j.bodyA = bodyA;
-    j.bodyB = bodyB;
-    j.restLength = restLength;
-    joints.push_back (j);
-    return j.id;
+    const auto& b = bodies[index];
+    auto& e = edges[index];
+
+    auto f = track.advance ({ b.segment, b.distance }, b.dir, b.radiusFwd);
+    e.front = { f.pos.segment, f.pos.distance, f.dir };
+
+    auto r = track.advance ({ b.segment, b.distance }, -b.dir, b.radiusBack);
+    e.back = { r.pos.segment, r.pos.distance, -r.dir };
 }
 
-void PhysicsEngine::removeJoint (int id)
+PhysicsEngine::ScanHit PhysicsEngine::scanAhead (const TrackGraph& track, size_t selfIndex,
+                                                 const Edge& from, int outDir, float maxRange) const
 {
-    joints.erase (std::remove_if (joints.begin(), joints.end(),
-        [id] (const PhysJoint& j) { return j.id == id; }), joints.end());
-}
+    ScanHit best;
 
-void PhysicsEngine::removeJointsForBody (int bodyId)
-{
-    joints.erase (std::remove_if (joints.begin(), joints.end(),
-        [bodyId] (const PhysJoint& j) { return j.bodyA == bodyId || j.bodyB == bodyId; }),
-        joints.end());
-}
+    int seg = from.segment;
+    float coord = from.distance;
+    int wdir = outDir;
+    float acc = 0.0f;
+    bool firstSpan = true;
 
-float PhysicsEngine::signedTrackDist (const TrackGraph& track,
-                                       const PhysBody& from, const PhysBody& to) const
-{
-    if (from.segment == to.segment)
-        return to.distance - from.distance;
-
-    const auto& segF = track.getSegment (from.segment);
-    const auto& segT = track.getSegment (to.segment);
-
-    float best = 1e9f;
-    bool found = false;
-
-    for (int sn : { segF.nodeA, segF.nodeB })
+    for (int hop = 0; hop < 64; ++hop)
     {
-        if (sn != segT.nodeA && sn != segT.nodeB) continue;
+        const auto& s = track.getSegment (seg);
+        float exitCoord = (wdir > 0) ? s.length : 0.0f;
+        float spanLen = (exitCoord - coord) * (float) wdir;
 
-        if (const auto* sw = track.findSwitch (sn))
+        for (size_t k = 0; k < bodies.size(); ++k)
         {
-            bool ok = false;
-            if (from.segment == sw->stemSegment)
-                ok = (to.segment == sw->normalSegment || to.segment == sw->reverseSegment);
-            else if (from.segment == sw->normalSegment || from.segment == sw->reverseSegment)
-                ok = (to.segment == sw->stemSegment);
-            if (! ok) continue;
+            if (k == selfIndex || ! bodies[k].active) continue;
+
+            for (const Edge* m : { &edges[k].front, &edges[k].back })
+            {
+                if (m->segment != seg) continue;
+
+                float rel = (m->distance - coord) * (float) wdir;
+                // On the first span allow a small window behind the scan origin
+                // so shallow overlaps are seen; anything deeper is a body that
+                // sits behind us, not an obstruction ahead.
+                if (rel < (firstSpan ? -kOverlapWindow : -kContactEps)) continue;
+
+                float g = acc + rel;
+                if (g > maxRange || g >= best.gap) continue;
+
+                best.gap = g;
+                best.bodyIndex = (int) k;
+                best.buffer = false;
+                best.walkDir = wdir;
+                best.markerVelDir = m->velDir;
+            }
         }
 
-        float dF = (sn == segF.nodeB) ? (segF.length - from.distance) : -from.distance;
-        float dT = (sn == segT.nodeA) ? to.distance : -(segT.length - to.distance);
-        float total = dF + dT;
+        acc += spanLen;
+        if (acc > maxRange)
+            break;
 
-        if (! found || std::abs (total) < std::abs (best))
+        int exitNode = (wdir > 0) ? s.nodeB : s.nodeA;
+        int next = track.routeThrough (seg, exitNode);
+        if (next < 0)
         {
-            best = total;
-            found = true;
+            if (acc < best.gap)
+            {
+                best = {};
+                best.gap = acc;
+                best.buffer = true;
+                best.walkDir = wdir;
+            }
+            break;
         }
+
+        const auto& ns = track.getSegment (next);
+        wdir = (ns.nodeA == exitNode) ? 1 : -1;
+        coord = (wdir > 0) ? 0.0f : ns.length;
+        seg = next;
+        firstSpan = false;
     }
 
-    return found ? best : 1e9f;
+    return best;
+}
+
+// True if the body cannot move at all in the given direction (relative to its
+// facing): it is pinned against a buffer, or against a chain of stationary
+// bodies that eventually ends at one
+bool PhysicsEngine::isBlockedAhead (const TrackGraph& track, size_t index,
+                                    int alongFacing, int depth) const
+{
+    if (depth > 100)
+        return true;
+
+    const Edge& lead = (alongFacing > 0) ? edges[index].front : edges[index].back;
+    int outDir = (alongFacing > 0) ? lead.velDir : -lead.velDir;
+
+    auto hit = scanAhead (track, index, lead, outDir, kBlockGap);
+
+    if (hit.buffer)
+        return true;
+    if (hit.bodyIndex < 0 || hit.gap > kBlockGap)
+        return false;
+
+    const auto& o = bodies[(size_t) hit.bodyIndex];
+    float oAlong = o.speed * (float) (hit.markerVelDir * hit.walkDir);
+    if (std::abs (oAlong) > kContactEps)
+        return false;   // it is moving, not a wall
+
+    return isBlockedAhead (track, (size_t) hit.bodyIndex,
+                           hit.markerVelDir * hit.walkDir, depth + 1);
 }
 
 void PhysicsEngine::step (const TrackGraph& track, float dt)
 {
-    constexpr int kSubSteps = 4;
+    for (auto& b : bodies)
+        b.moved = 0.0f;
+
     float subDt = dt / (float) kSubSteps;
 
     for (int sub = 0; sub < kSubSteps; ++sub)
     {
+        edges.resize (bodies.size());
+        for (size_t i = 0; i < bodies.size(); ++i)
+            if (bodies[i].active)
+                computeEdges (track, i);
 
-    // 1. Clear forces
-    for (auto& b : bodies)
-    {
-        if (! b.active) continue;
-        b.force = 0.0f;
-    }
-
-    // 2. Apply friction: decelerate directly (not as a force, to avoid overshoot)
-    for (auto& b : bodies)
-    {
-        if (! b.active || b.friction <= 0.0f) continue;
-        if (std::abs (b.velocity) > 0.01f)
+        // 1. Friction: decelerate free-rolling bodies toward zero
+        for (auto& b : bodies)
         {
+            if (! b.active || b.friction <= 0.0f) continue;
+
             float dv = b.friction * subDt;
-            if (b.velocity > 0.0f)
-                b.velocity = std::max (0.0f, b.velocity - dv);
-            else
-                b.velocity = std::min (0.0f, b.velocity + dv);
+            if (b.speed > dv)        b.speed -= dv;
+            else if (b.speed < -dv)  b.speed += dv;
+            else                     b.speed = 0.0f;
         }
-        else
+
+        // 2. Move, clamping BEFORE movement so nothing can tunnel
+        for (size_t i = 0; i < bodies.size(); ++i)
         {
-            b.velocity = 0.0f;
-        }
-    }
+            auto& b = bodies[i];
+            if (! b.active) continue;
 
-    // 3. Joint spring-damper forces
-    for (auto& j : joints)
-    {
-        if (! j.active) continue;
-        auto* a = findBody (j.bodyA);
-        auto* b = findBody (j.bodyB);
-        if (! a || ! b) continue;
+            b.speed = std::max (-kMaxSpeed, std::min (kMaxSpeed, b.speed));
 
-        float dist = signedTrackDist (track, *a, *b);
-        if (std::abs (dist) > 1e8f) continue;
+            float desired = std::abs (b.speed) * subDt;
+            if (desired <= 0.0f) continue;
 
-        float stretch = std::abs (dist) - j.restLength;
-        float sign = (dist > 0.0f) ? 1.0f : -1.0f;
-        float relVel = b->velocity - a->velocity;
+            const Edge& lead = (b.speed > 0.0f) ? edges[i].front : edges[i].back;
+            int outDir = (b.speed > 0.0f) ? lead.velDir : -lead.velDir;
 
-        float springForce = j.stiffness * stretch * sign;
-        float dampForce = j.damping * relVel * sign;
-        float totalForce = std::max (-kMaxForce, std::min (kMaxForce, springForce + dampForce));
+            auto hit = scanAhead (track, i, lead, outDir, desired + kContactEps);
+            float allowed = std::min (desired, std::max (0.0f, hit.gap));
 
-        a->force += totalForce;
-        b->force -= totalForce;
-    }
-
-    // 4. Collision: impulse-based (not spring) — hard inelastic
-    for (size_t i = 0; i < bodies.size(); ++i)
-    {
-        if (! bodies[i].active) continue;
-
-        for (size_t k = i + 1; k < bodies.size(); ++k)
-        {
-            if (! bodies[k].active) continue;
-
-            bool joined = false;
-            for (const auto& j : joints)
-                if (j.active && ((j.bodyA == bodies[i].id && j.bodyB == bodies[k].id) ||
-                                  (j.bodyA == bodies[k].id && j.bodyB == bodies[i].id)))
-                    { joined = true; break; }
-            if (joined) continue;
-
-            float dist = signedTrackDist (track, bodies[i], bodies[k]);
-            if (std::abs (dist) > 1e8f) continue;
-
-            float absDist = std::abs (dist);
-            if (absDist >= kMinGap) continue;
-
-            float sign = (dist > 0.0f) ? 1.0f : -1.0f;
-
-            // Check if approaching
-            float vi = bodies[i].velocity;
-            float vk = bodies[k].velocity;
-            float relApproach = (vi - vk) * sign;
-
-            if (relApproach > 0.0f)
+            if (allowed > 0.0f)
             {
-                // Inelastic collision: share velocity by mass
-                float totalMass = bodies[i].mass + bodies[k].mass;
-                float newV = (bodies[i].mass * vi + bodies[k].mass * vk) / totalMass;
-                bodies[i].velocity = newV;
-                bodies[k].velocity = newV;
+                int moveDir = (b.speed > 0.0f) ? b.dir : -b.dir;
+                auto res = track.advance ({ b.segment, b.distance }, moveDir, allowed);
+                b.segment = res.pos.segment;
+                b.distance = res.pos.distance;
+                b.dir = (b.speed > 0.0f) ? res.dir : -res.dir;
+                b.moved += allowed;
+                if (res.stopped)
+                    b.speed = 0.0f;
+                computeEdges (track, i);
             }
 
-            // Separate: push apart along track (stay on segment)
-            float penetration = kMinGap - absDist;
-            if (penetration > 0.01f)
+            if (hit.bodyIndex >= 0)
             {
-                float totalMass = bodies[i].mass + bodies[k].mass;
-                float sepI = penetration * (bodies[k].mass / totalMass) * 0.5f;
-                float sepK = penetration * (bodies[i].mass / totalMass) * 0.5f;
+                // Contact this substep: inelastic momentum transfer,
+                // but only when approaching, never when separating
+                auto& o = bodies[(size_t) hit.bodyIndex];
+                float along = (float) (hit.markerVelDir * hit.walkDir);
+                float va = std::abs (b.speed);
+                float vo = o.speed * along;
 
-                auto nudge = [&] (PhysBody& body, float amount)
+                if (b.speed != 0.0f && va - vo > kContactEps)
                 {
-                    const auto& seg = track.getSegment (body.segment);
-                    body.distance = std::max (0.0f, std::min (seg.length, body.distance + amount));
-                };
-
-                nudge (bodies[i], -sign * sepI);
-                nudge (bodies[k], sign * sepK);
+                    if (std::abs (vo) <= kContactEps
+                        && isBlockedAhead (track, (size_t) hit.bodyIndex,
+                                           hit.markerVelDir * hit.walkDir, 0))
+                    {
+                        // Pushing an immovable chain: fully blocked, no bouncing
+                        b.speed = 0.0f;
+                    }
+                    else
+                    {
+                        float w = (b.mass * va + o.mass * vo) / (b.mass + o.mass);
+                        b.speed = (b.speed > 0.0f) ? w : -w;
+                        o.speed = w * along;
+                    }
+                }
+            }
+            else if (hit.buffer)
+            {
+                // Fully blocked against the end of the track
+                b.speed = 0.0f;
             }
         }
-    }
 
-    // 5. Integrate: F = ma → a = F/m → v += a*dt → pos += v*dt
-    for (auto& b : bodies)
-    {
-        if (! b.active) continue;
-
-        float accel = b.force / b.mass;
-        b.velocity += accel * subDt;
-
-        // Clamp velocity
-        b.velocity = std::max (-30.0f, std::min (30.0f, b.velocity));
-
-        if (std::abs (b.velocity) < 0.001f)
+        // 3. Gentle separation for residual overlaps (capped so nothing launches)
+        for (size_t i = 0; i < bodies.size(); ++i)
         {
-            b.velocity = 0.0f;
-            continue;
+            auto& b = bodies[i];
+            if (! b.active) continue;
+
+            auto resolve = [&] (const Edge& e, int outDir, int retreatDir)
+            {
+                auto hit = scanAhead (track, i, e, outDir, 0.0f);
+                if (hit.bodyIndex < 0 || hit.gap >= 0.0f) return;
+
+                float push = std::min (kSeparationCap, -hit.gap * 0.5f);
+                auto res = track.advance ({ b.segment, b.distance }, retreatDir, push);
+                b.segment = res.pos.segment;
+                b.distance = res.pos.distance;
+                b.dir = (retreatDir == b.dir) ? res.dir : -res.dir;
+                computeEdges (track, i);
+            };
+
+            resolve (edges[i].front, edges[i].front.velDir, -b.dir);
+            resolve (edges[i].back, -edges[i].back.velDir, b.dir);
         }
-
-        float moveDist = b.velocity * subDt;
-        int moveDir = (moveDist > 0.0f) ? b.dir : -b.dir;
-        TrackPos pos { b.segment, b.distance };
-        auto result = track.advance (pos, moveDir, std::abs (moveDist));
-        b.segment = result.pos.segment;
-        b.distance = result.pos.distance;
-        if (moveDist > 0.0f)
-            b.dir = result.dir;
-        else
-            b.dir = -result.dir;
-
-        if (result.stopped)
-            b.velocity = 0.0f;
     }
 
-    } // end substep loop
-
-    // Cleanup
     bodies.erase (std::remove_if (bodies.begin(), bodies.end(),
         [] (const PhysBody& b) { return ! b.active; }), bodies.end());
+    edges.resize (bodies.size());
 }
 
 } // namespace game

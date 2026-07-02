@@ -74,14 +74,6 @@ void GameState::spawnPlayer (int controllerIndex, int slot)
                     ? spawnDropOffOrder[(size_t) slot] : slot;
     auto spawn = spawnPosNearDropOff (dzIdx);
 
-    Player p;
-    p.controllerIndex = controllerIndex;
-    p.slot   = slot;
-    p.colour = kSlotColours[slot];
-    p.pos    = spawn.pos;
-    p.dir    = spawn.dir;
-    p.facing = spawn.dir;
-
     for (auto& existing : players)
     {
         if (existing.slot == slot)
@@ -91,6 +83,15 @@ void GameState::spawnPlayer (int controllerIndex, int slot)
             return;
         }
     }
+
+    Player p;
+    p.controllerIndex = controllerIndex;
+    p.slot   = slot;
+    p.colour = kSlotColours[slot];
+    p.pos    = spawn.pos;
+    p.dir    = spawn.dir;
+    p.bodyId = physics.addBody (spawn.pos.segment, spawn.pos.distance,
+                                spawn.dir, kEngineMass, 0.0f);
 
     players.push_back (std::move (p));
 }
@@ -107,7 +108,8 @@ void GameState::spawnAi (int slot)
     p.colour = kSlotColours[slot];
     p.pos    = spawn.pos;
     p.dir    = spawn.dir;
-    p.facing = spawn.dir;
+    p.bodyId = physics.addBody (spawn.pos.segment, spawn.pos.distance,
+                                spawn.dir, kEngineMass, 0.0f);
 
     p.ai = AiBrain {};
 
@@ -216,6 +218,7 @@ void GameState::placeInitialCars()
             car.pos    = { spur.segment, dist };
             car.dir    = 1;
             car.free   = true;
+            car.bodyId = physics.addBody (spur.segment, dist, 1, kCarMass, kCarFriction);
             cars.push_back (car);
         }
     }
@@ -236,94 +239,91 @@ void GameState::update (float dt, gin::GameControllerManager& controllers)
 
     for (auto& p : players)
     {
+        float speed = 0.0f;
+        bool toggleFwdEdge = false, toggleBackEdge = false, uncoupleEdge = false;
+
         if (p.ai.has_value())
         {
-            aiUpdate (p, dt);
-            continue;
+            speed = aiUpdate (p, dt);
+        }
+        else if (p.controllerIndex >= 0)
+        {
+            auto* c = controllers.getController (p.controllerIndex);
+            if (c != nullptr && c->isConnected())
+            {
+                float throttle = -c->getAxis (A::leftY);
+
+                if (c->isButtonDown (B::dpadUp))   throttle =  1.0f;
+                if (c->isButtonDown (B::dpadDown)) throttle = -1.0f;
+                if (std::abs (throttle) < 0.05f)   throttle =  0.0f;
+
+                speed = throttle * kTrainSpeed;
+
+                bool toggleFwd  = c->isButtonDown (B::faceDown);    // A = switch ahead
+                bool toggleBack = c->isButtonDown (B::faceRight);   // B = switch behind
+                bool uncouple   = c->isButtonDown (B::faceUp);      // Y = decouple
+
+                toggleFwdEdge  = toggleFwd  && ! p.prevToggleFwd;
+                toggleBackEdge = toggleBack && ! p.prevToggleBack;
+                uncoupleEdge   = uncouple   && ! p.prevUncouple;
+                p.prevToggleFwd  = toggleFwd;
+                p.prevToggleBack = toggleBack;
+                p.prevUncouple   = uncouple;
+            }
         }
 
-        if (p.controllerIndex < 0)
-            continue;
+        handleActions (p, speed, toggleFwdEdge, toggleBackEdge, uncoupleEdge);
 
-        auto* c = controllers.getController (p.controllerIndex);
-        if (c == nullptr || ! c->isConnected())
-            continue;
-
-        float throttle = -c->getAxis (A::leftY);
-
-        if (c->isButtonDown (B::dpadUp))   throttle =  1.0f;
-        if (c->isButtonDown (B::dpadDown)) throttle = -1.0f;
-
-        float moveDist = throttle * kTrainSpeed * dt;
-
-        bool toggleFwd  = c->isButtonDown (B::faceDown);    // A = switch ahead
-        bool toggleBack = c->isButtonDown (B::faceRight);   // B = switch behind
-        bool uncouple   = c->isButtonDown (B::faceUp);      // Y = decouple
-
-        bool toggleFwdEdge  = toggleFwd  && ! p.prevToggleFwd;
-        bool toggleBackEdge = toggleBack && ! p.prevToggleBack;
-        bool uncoupleEdge   = uncouple   && ! p.prevUncouple;
-        p.prevToggleFwd  = toggleFwd;
-        p.prevToggleBack = toggleBack;
-        p.prevUncouple   = uncouple;
-
-        updatePlayer (p, moveDist, toggleFwdEdge, toggleBackEdge, uncoupleEdge);
+        // Engine desired speed comes from the throttle; the collision
+        // boundary extends over the coupled cars on each side
+        if (auto* b = physics.findBody (p.bodyId))
+        {
+            b->speed      = speed;
+            b->mass       = kEngineMass + (float) p.totalCars() * kCarMass;
+            b->radiusFwd  = kVehicleHalfLen + (float) p.frontCars.size() * kCarSpacing;
+            b->radiusBack = kVehicleHalfLen + (float) p.rearCars.size()  * kCarSpacing;
+        }
     }
 
-}
+    physics.step (track, dt);
 
-void GameState::updatePlayer (Player& p, float moveDist, bool toggleFwd, bool toggleBack, bool uncouple)
-{
-    if (std::abs (moveDist) > 0.001f)
+    // Read positions back from the physics bodies
+    for (auto& p : players)
     {
-        bool forward = moveDist > 0.0f;
-        int moveDir = forward ? p.dir : -p.dir;
-        float dist = std::abs (moveDist);
-
-        int leadCount = forward ? (int) p.frontCars.size()
-                                : (int) p.rearCars.size();
-        if (leadCount > 0)
+        if (auto* b = physics.findBody (p.bodyId))
         {
-            float leadOffset = (float) leadCount * kCarSpacing;
-            auto leadPos = track.advance (p.pos, moveDir, leadOffset);
-            auto leadTest = track.advance (leadPos.pos, leadPos.dir, dist);
-            if (leadTest.stopped)
-            {
-                auto leadStart = track.worldPos (leadPos.pos);
-                auto leadEnd   = track.worldPos (leadTest.pos);
-                float actualDist = leadStart.getDistanceFrom (leadEnd);
-                dist = juce::jmin (dist, actualDist);
-            }
-        }
-        else
-        {
-            auto test = track.advance (p.pos, moveDir, dist);
-            if (test.stopped)
-            {
-                auto startW = track.worldPos (p.pos);
-                auto endW   = track.worldPos (test.pos);
-                dist = startW.getDistanceFrom (endW);
-            }
-        }
+            p.pos = { b->segment, b->distance };
+            p.dir = b->dir;
 
-        dist = collisionLimit (p, moveDir, dist);
-
-        if (dist > 0.001f)
-        {
-            auto result = track.advance (p.pos, moveDir, dist);
-            p.pos = result.pos;
-            p.dir = forward ? result.dir : -result.dir;
-            p.facing = p.dir;
-            p.lastMoveDir = result.dir;
             if (p.recoupleLock)
             {
-                p.recoupleLockDist += dist;
+                p.recoupleLockDist += b->moved;
                 if (p.recoupleLockDist > kCarSpacing * 2.0f)
                     p.recoupleLock = false;
             }
         }
     }
 
+    for (auto& c : cars)
+    {
+        if (! c.free) continue;
+
+        if (auto* b = physics.findBody (c.bodyId))
+        {
+            c.pos = { b->segment, b->distance };
+            c.dir = b->dir;
+        }
+    }
+
+    for (auto& p : players)
+    {
+        checkCoupling (p);
+        checkScoring (p);
+    }
+}
+
+void GameState::handleActions (Player& p, float engineSpeed, bool toggleFwd, bool toggleBack, bool uncouple)
+{
     auto tryToggle = [&] (int searchDir)
     {
         // Search from the end of the consist in that direction
@@ -351,7 +351,7 @@ void GameState::updatePlayer (Player& p, float moveDist, bool toggleFwd, bool to
 
     if (uncouple && p.totalCars() > 0)
     {
-        auto dropAll = [&] (std::vector<int>& list, int dropDir)
+        auto dropAll = [&] (std::vector<int>& list, int dropDir, float carSpeed)
         {
             for (int i = 0; i < (int) list.size(); ++i)
             {
@@ -364,21 +364,23 @@ void GameState::updatePlayer (Player& p, float moveDist, bool toggleFwd, bool to
                         c.free = true;
                         c.pos = dropPos.pos;
                         c.dir = dropPos.dir;
+                        c.bodyId = physics.addBody (dropPos.pos.segment, dropPos.pos.distance,
+                                                    dropPos.dir, kCarMass, kCarFriction);
+                        physics.findBody (c.bodyId)->speed = carSpeed;
                         break;
                     }
             }
             list.clear();
         };
 
-        dropAll (p.frontCars, p.dir);
-        dropAll (p.rearCars, -p.dir);
+        // Each car keeps the engine's speed, projected onto its own direction:
+        // rear cars face away from the engine, so the sign flips
+        dropAll (p.frontCars, p.dir, engineSpeed);
+        dropAll (p.rearCars, -p.dir, -engineSpeed);
         p.hasColourLock = false;
         p.recoupleLock = true;
         p.recoupleLockDist = 0.0f;
     }
-
-    checkCoupling (p);
-    checkScoring (p);
 }
 
 void GameState::checkCoupling (Player& p)
@@ -413,7 +415,11 @@ void GameState::checkCoupling (Player& p)
                 p.hasColourLock = true;
             }
 
+            // Coupled cars lose their physics body: they ride rigidly
+            // with the engine, covered by its collision radius
             c.free = false;
+            physics.removeBody (c.bodyId);
+            c.bodyId = -1;
             if (df <= dr)
                 p.frontCars.push_back (c.id);
             else
@@ -524,53 +530,6 @@ bool GameState::canToggleSwitch (int switchNode) const
     return sw->cooldown <= 0.0f && ! isSwitchOccupied (switchNode);
 }
 
-float GameState::collisionLimit (const Player& p, int moveDir, float maxDist) const
-{
-    bool forward = (moveDir == p.dir);
-    int leadCount = forward ? (int) p.frontCars.size() : (int) p.rearCars.size();
-    float leadOffset = (float) leadCount * kCarSpacing;
-
-    auto leadPos = track.advance (p.pos, moveDir, leadOffset + kCarSpacing * 0.5f);
-    auto leadWorld = track.worldPos (leadPos.pos);
-
-    constexpr float kMinGap = 0.8f;
-
-    auto checkVehicle = [&] (juce::Point<float> vw)
-    {
-        float gap = leadWorld.getDistanceFrom (vw) - kMinGap;
-        if (gap < maxDist)
-            maxDist = juce::jmax (0.0f, gap);
-    };
-
-    // Check other players' engines and coupled cars
-    for (const auto& other : players)
-    {
-        if (&other == &p) continue;
-
-        checkVehicle (track.worldPos (other.pos));
-
-        for (int i = 0; i < (int) other.frontCars.size(); ++i)
-            checkVehicle (carWorldPos (other, true, i));
-
-        for (int i = 0; i < (int) other.rearCars.size(); ++i)
-            checkVehicle (carWorldPos (other, false, i));
-    }
-
-    // Check free cars on the track
-    for (const auto& c : cars)
-    {
-        if (! c.free) continue;
-
-        // Skip cars of the colour we can couple (we'll couple them, not collide)
-        if (! p.hasColourLock || c.colour == p.carryColour)
-            continue;
-
-        checkVehicle (track.worldPos (c.pos));
-    }
-
-    return maxDist;
-}
-
 juce::Point<float> GameState::carWorldPos (const Player& p, bool front, int index) const
 {
     float dist = (float) (index + 1) * kCarSpacing;
@@ -591,9 +550,9 @@ float GameState::carAngle (const Player& p, bool front, int index) const
 // AI
 // ============================================================================
 
-void GameState::aiUpdate (Player& p, float dt)
+float GameState::aiUpdate (Player& p, float dt)
 {
-    if (! p.ai.has_value()) return;
+    if (! p.ai.has_value()) return 0.0f;
     auto& brain = *p.ai;
 
     brain.thinkTimer -= dt;
@@ -615,9 +574,6 @@ void GameState::aiUpdate (Player& p, float dt)
     // Leave drop-off: just drive forward until we've passed a switch
     if (brain.state == AiBrain::leavingDropOff)
     {
-        float moveDist = kTrainSpeed * 0.7f * dt;
-        updatePlayer (p, moveDist, false, false, false);
-
         // Check if we've reached a switch — safe to start seeking
         auto sw = track.nextSwitchAhead (p.pos, p.dir);
         auto swBack = track.nextSwitchAhead (p.pos, -p.dir);
@@ -635,7 +591,7 @@ void GameState::aiUpdate (Player& p, float dt)
             brain.state = AiBrain::idle;
             brain.stuckCount = 0;
         }
-        return;
+        return kTrainSpeed * 0.7f;
     }
 
     if (rethink)
@@ -700,7 +656,7 @@ void GameState::aiUpdate (Player& p, float dt)
         }
 
         if (! hasTarget)
-            return;
+            return 0.0f;
     }
     else if (brain.state == AiBrain::returningHome)
     {
@@ -725,11 +681,11 @@ void GameState::aiUpdate (Player& p, float dt)
         }
 
         if (! hasTarget)
-            return;
+            return 0.0f;
     }
 
     if (! hasTarget)
-        return;
+        return 0.0f;
 
     auto locoWorld = track.worldPos (p.pos);
 
@@ -745,7 +701,7 @@ void GameState::aiUpdate (Player& p, float dt)
     }
 
     if (brain.path.empty())
-        return;
+        return 0.0f;
 
     int pathIdx = 0;
     for (int i = 0; i < (int) brain.path.size(); ++i)
@@ -778,7 +734,6 @@ void GameState::aiUpdate (Player& p, float dt)
     }
 
     float throttle = (moveDir == p.dir) ? 1.0f : -1.0f;
-    float moveDist = throttle * kTrainSpeed * 0.7f * dt;
 
     // Set switches along the path so the route is clear
     if ((segChanged || brain.switchCooldown <= 0.0f) && brain.path.size() >= 2 && brain.switchCooldown <= 0.0f)
@@ -834,9 +789,7 @@ void GameState::aiUpdate (Player& p, float dt)
         }
     }
 
-    updatePlayer (p, moveDist, false, false, false);
-
-    // State transitions after movement
+    // State transitions (coupling/scoring results show up after the physics step)
     if (brain.state == AiBrain::seekingCar && p.totalCars() > 0)
     {
         brain.state = AiBrain::returningHome;
@@ -849,6 +802,8 @@ void GameState::aiUpdate (Player& p, float dt)
         brain.path.clear();
         brain.stuckCount = 0;
     }
+
+    return throttle * kTrainSpeed * 0.7f;
 }
 
 } // namespace game

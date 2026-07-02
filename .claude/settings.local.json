@@ -54,7 +54,24 @@
       "WebFetch(domain:open-rails.readthedocs.io)",
       "WebFetch(domain:sumo.dlr.de)",
       "WebFetch(domain:www.coalstonewcastle.com.au)",
-      "Bash(git checkout *)"
+      "Bash(git checkout *)",
+      "Bash(grep -E \"^\\\\-.*\\\\.\\(sh|cmake|json|bat|cmd|ps1\\)$\")",
+      "Bash(git config *)",
+      "Bash(git ls-tree *)",
+      "Bash(find *)",
+      "Bash(git -C /Users/rrabien/dev/Shunt log --all --oneline --name-only -- '*PHYSICS*')",
+      "Bash(git *)",
+      "Bash(./debug_headon)",
+      "Skill(run)",
+      "Bash(osascript -e 'tell application \"Shunt\" to activate')",
+      "Bash(screencapture -x /private/tmp/claude-501/-Users-rrabien-dev-Shunt/ef38cdb0-1986-4230-a2b8-5d6eea7d1bea/scratchpad/title.png)",
+      "Bash(screencapture -x /private/tmp/claude-501/-Users-rrabien-dev-Shunt/ef38cdb0-1986-4230-a2b8-5d6eea7d1bea/scratchpad/test.png)",
+      "Bash(osascript -e 'tell application \"System Events\" to keystroke return')",
+      "Bash(screencapture -x /private/tmp/claude-501/-Users-rrabien-dev-Shunt/ef38cdb0-1986-4230-a2b8-5d6eea7d1bea/scratchpad/game_t0.png)",
+      "Bash(pkill -f Shunt.app/Contents/MacOS/Shunt)",
+      "Bash(osascript -e 'tell application \"Shunt\" to id of window 1')",
+      "Bash(/usr/bin/python3 -c \"import Quartz; print\\('ok'\\)\")",
+      "Read(//usr/bin/**)"
     ]
   }
 }

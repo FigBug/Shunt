@@ -16,6 +16,7 @@ struct Car
     TrackPos pos;
     int dir = 1;
     bool free = true;
+    int bodyId = -1;   // physics body while free, -1 when coupled
 };
 
 struct AiBrain
@@ -41,9 +42,7 @@ struct Player
 
     TrackPos pos;
     int dir = 1;
-
-    int facing = 1;
-    int lastMoveDir = 1;
+    int bodyId = -1;
 
     std::vector<int> frontCars;
     std::vector<int> rearCars;

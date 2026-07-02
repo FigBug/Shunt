@@ -86,6 +86,10 @@ public:
     MoveResult advance (TrackPos pos, int dir, float dist) const;
 
     int nodeAtEnd (int segment, int whichEnd) const;
+
+    // The segment reached when leaving fromSeg through atNode, honouring
+    // switch state and crossing pairs. -1 if the track ends there.
+    int routeThrough (int fromSeg, int atNode) const;
     std::optional<int> nextSwitchAhead (TrackPos pos, int dir) const;
 
     bool isMainLine (int segment) const;
@@ -115,7 +119,6 @@ private:
     std::vector<DropOffZone>  dropOffs;
     int mainLineEnd = -1;
 
-    int routeThrough (int fromSeg, int atNode) const;
     std::vector<int> segmentsAtNode (int node) const;
 
     friend void buildDefaultYard (TrackGraph& graph);
