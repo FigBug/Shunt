@@ -50,6 +50,14 @@ struct SidingInfo
     int switchNode = 0;
 };
 
+// Authored car start position (from the level editor's "spawns" array). Stored
+// in world coordinates; resolved to a TrackPos at placement time.
+struct SpawnPoint
+{
+    juce::Point<float> pos;
+    int colour = -1;   // -1 = let the game assign a colour, else a CarColour index
+};
+
 class TrackGraph
 {
 public:
@@ -63,6 +71,13 @@ public:
     struct DropOffZone { int colourIndex = 0; int node = 0; };
     void addDropOff (int colourIndex, int node);
     const std::vector<DropOffZone>& getDropOffs() const { return dropOffs; }
+
+    void addSpawn (juce::Point<float> pos, int colour);
+    const std::vector<SpawnPoint>& getSpawns() const { return spawns; }
+
+    // Snap a world point onto the nearest track segment, returning the closest
+    // position on the graph. Used to resolve authored spawn points to TrackPos.
+    TrackPos nearestTrackPos (juce::Point<float> world) const;
 
     int numNodes() const noexcept    { return (int) nodes.size(); }
     int numSegments() const noexcept { return (int) segments.size(); }
@@ -117,6 +132,7 @@ private:
     std::vector<CrossingInfo> crossings;
     std::vector<SidingInfo>   sidings;
     std::vector<DropOffZone>  dropOffs;
+    std::vector<SpawnPoint>   spawns;
     int mainLineEnd = -1;
 
     std::vector<int> segmentsAtNode (int node) const;

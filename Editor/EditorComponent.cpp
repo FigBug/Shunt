@@ -1,0 +1,190 @@
+#include "EditorComponent.h"
+
+namespace
+{
+    struct ToolDef { EditorCanvas::Tool tool; const char* name; };
+    const ToolDef kTools[] = {
+        { EditorCanvas::Tool::select,   "Select (V)"   },
+        { EditorCanvas::Tool::straight, "Straight (L)" },
+        { EditorCanvas::Tool::curve,    "Curve (C)"    },
+        { EditorCanvas::Tool::rect,     "Rect (R)"     },
+        { EditorCanvas::Tool::spawn,    "Spawn (S)"    },
+        { EditorCanvas::Tool::dropOff,  "Drop-off (D)" },
+        { EditorCanvas::Tool::erase,    "Erase (E)"    },
+    };
+}
+
+EditorComponent::EditorComponent()
+{
+    addAndMakeVisible (canvas);
+
+    for (const auto& td : kTools)
+    {
+        auto* b = new juce::TextButton (td.name);
+        b->setClickingTogglesState (false);
+        b->setConnectedEdges (juce::Button::ConnectedOnLeft | juce::Button::ConnectedOnRight);
+        auto tool = td.tool;
+        b->onClick = [this, tool] { selectTool (tool); };
+        addAndMakeVisible (b);
+        toolButtons.add (b);
+    }
+
+    for (int i = 0; i < 4; ++i)
+    {
+        auto* b = new juce::TextButton (juce::String (i));
+        b->setColour (juce::TextButton::buttonColourId, LevelDocument::slotColour (i));
+        b->onClick = [this, i] { canvas.setDropColour (i); refreshToolButtons(); };
+        addAndMakeVisible (b);
+        colourButtons.add (b);
+    }
+
+    newButton.onClick    = [this] { newLevel(); };
+    openButton.onClick   = [this] { openLevel(); };
+    saveButton.onClick   = [this] { saveLevel (false); };
+    saveAsButton.onClick = [this] { saveLevel (true); };
+    frameButton.onClick  = [this] { canvas.frameAll(); };
+    for (auto* b : { &newButton, &openButton, &saveButton, &saveAsButton, &frameButton })
+        addAndMakeVisible (b);
+
+    statusBar.setColour (juce::Label::backgroundColourId, juce::Colour::fromRGB (24, 26, 30));
+    statusBar.setColour (juce::Label::textColourId, juce::Colours::lightgrey);
+    statusBar.setFont (juce::Font (juce::FontOptions (13.0f)));
+    addAndMakeVisible (statusBar);
+
+    canvas.onStatusChanged = [this] { statusBar.setText (canvas.statusText, juce::dontSendNotification); };
+    canvas.onToolChanged   = [this] { refreshToolButtons(); };
+
+    selectTool (EditorCanvas::Tool::select);
+    setSize (1280, 800);
+}
+
+EditorComponent::~EditorComponent() = default;
+
+void EditorComponent::selectTool (EditorCanvas::Tool t)
+{
+    canvas.setTool (t);
+    refreshToolButtons();
+    canvas.grabKeyboardFocus();
+}
+
+void EditorComponent::refreshToolButtons()
+{
+    auto active = canvas.getTool();
+    for (int i = 0; i < toolButtons.size(); ++i)
+    {
+        bool on = (kTools[i].tool == active);
+        toolButtons[i]->setColour (juce::TextButton::buttonColourId,
+            on ? juce::Colour::fromRGB (70, 120, 200) : juce::Colour::fromRGB (55, 58, 64));
+    }
+    for (int i = 0; i < colourButtons.size(); ++i)
+    {
+        bool on = (i == canvas.getDropColour());
+        colourButtons[i]->setColour (juce::TextButton::textColourOffId,
+            on ? juce::Colours::black : juce::Colours::black.withAlpha (0.35f));
+        colourButtons[i]->setButtonText (on ? "*" + juce::String (i) : juce::String (i));
+    }
+}
+
+// ---- file I/O --------------------------------------------------------------
+
+void EditorComponent::newLevel()
+{
+    doc.clear();
+    currentFile = juce::File();
+    canvas.frameAll();
+    canvas.repaint();
+}
+
+bool EditorComponent::loadFile (const juce::File& file)
+{
+    if (! file.existsAsFile() || ! doc.loadFromString (file.loadFileAsString()))
+        return false;
+    currentFile = file;
+    canvas.frameAll();
+    canvas.repaint();
+    return true;
+}
+
+void EditorComponent::openLevel()
+{
+    chooser = std::make_unique<juce::FileChooser> ("Open a Shunt level",
+                    juce::File(), "*.json");
+    auto flags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
+    chooser->launchAsync (flags, [this] (const juce::FileChooser& fc)
+    {
+        auto file = fc.getResult();
+        if (file == juce::File()) return;
+        if (doc.loadFromString (file.loadFileAsString()))
+        {
+            currentFile = file;
+            canvas.frameAll();
+            canvas.repaint();
+        }
+        else
+        {
+            juce::AlertWindow::showMessageBoxAsync (juce::AlertWindow::WarningIcon,
+                "Open failed", "Could not parse " + file.getFileName());
+        }
+    });
+}
+
+void EditorComponent::saveLevel (bool forceChooser)
+{
+    auto write = [this] (juce::File file)
+    {
+        if (! file.hasFileExtension ("json"))
+            file = file.withFileExtension ("json");
+        if (file.replaceWithText (doc.toJsonString()))
+            currentFile = file;
+    };
+
+    if (! forceChooser && currentFile != juce::File())
+    {
+        write (currentFile);
+        return;
+    }
+
+    chooser = std::make_unique<juce::FileChooser> ("Save Shunt level",
+                    currentFile != juce::File() ? currentFile
+                                                : juce::File::getSpecialLocation (
+                                                      juce::File::userDocumentsDirectory)
+                                                      .getChildFile ("level.json"),
+                    "*.json");
+    auto flags = juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
+               | juce::FileBrowserComponent::warnAboutOverwriting;
+    chooser->launchAsync (flags, [write] (const juce::FileChooser& fc)
+    {
+        auto file = fc.getResult();
+        if (file != juce::File())
+            write (file);
+    });
+}
+
+// ---- layout ----------------------------------------------------------------
+
+void EditorComponent::paint (juce::Graphics& g)
+{
+    g.fillAll (juce::Colour::fromRGB (40, 43, 48));
+}
+
+void EditorComponent::resized()
+{
+    auto area = getLocalBounds();
+
+    auto top = area.removeFromTop (40).reduced (4);
+    auto place = [&top] (juce::Button& b, int w) { b.setBounds (top.removeFromLeft (w).reduced (1)); };
+
+    for (auto* b : { &newButton, &openButton, &saveButton, &saveAsButton })
+        place (*b, 66);
+    top.removeFromLeft (12);
+    for (auto* b : toolButtons)
+        place (*b, 92);
+    top.removeFromLeft (12);
+    for (auto* b : colourButtons)
+        place (*b, 34);
+    top.removeFromLeft (12);
+    place (frameButton, 90);
+
+    statusBar.setBounds (area.removeFromBottom (24));
+    canvas.setBounds (area);
+}

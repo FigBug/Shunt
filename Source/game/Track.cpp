@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <queue>
 #include <map>
+#include <limits>
 
 namespace game
 {
@@ -45,6 +46,50 @@ void TrackGraph::addSiding (int slot, int segment, int bufferNode, int switchNod
 void TrackGraph::addDropOff (int colourIndex, int node)
 {
     dropOffs.push_back ({ colourIndex, node });
+}
+
+void TrackGraph::addSpawn (juce::Point<float> pos, int colour)
+{
+    spawns.push_back ({ pos, colour });
+}
+
+TrackPos TrackGraph::nearestTrackPos (juce::Point<float> world) const
+{
+    TrackPos best { 0, 0.0f };
+    float bestDist = std::numeric_limits<float>::max();
+
+    for (int si = 0; si < (int) segments.size(); ++si)
+    {
+        const auto& seg = segments[(size_t) si];
+
+        std::vector<juce::Point<float>> pts = seg.polyline;
+        if (pts.size() < 2)
+            pts = { nodes[(size_t) seg.nodeA].position,
+                    nodes[(size_t) seg.nodeB].position };
+
+        float accum = 0.0f;
+        for (size_t i = 0; i + 1 < pts.size(); ++i)
+        {
+            auto a = pts[i];
+            auto b = pts[i + 1];
+            auto d = b - a;
+            float len = d.getDistanceFromOrigin();
+            float t = 0.0f;
+            if (len > 0.0f)
+                t = juce::jlimit (0.0f, 1.0f,
+                                  ((world.x - a.x) * d.x + (world.y - a.y) * d.y) / (len * len));
+            auto proj = a + d * t;
+            float dist = proj.getDistanceFrom (world);
+            if (dist < bestDist)
+            {
+                bestDist = dist;
+                best = { si, accum + t * len };
+            }
+            accum += len;
+        }
+    }
+
+    return best;
 }
 
 SwitchInfo* TrackGraph::findSwitch (int node)
@@ -475,6 +520,19 @@ void TrackGraph::loadFromJson (const juce::String& json, float scale)
             int nodeId = (int) dv.getProperty ("node", -1);
             if (nodeMap.count (nodeId))
                 addDropOff (colour, nodeMap[nodeId]);
+        }
+    }
+
+    // Load car spawn points (authored in the level editor). Coordinates share
+    // the same scale as nodes/edges.
+    if (auto* spawnArr = root.getProperty ("spawns", {}).getArray())
+    {
+        for (const auto& sv : *spawnArr)
+        {
+            float x = (float) (double) sv.getProperty ("x", 0.0) * scale;
+            float y = (float) (double) sv.getProperty ("y", 0.0) * scale;
+            int colour = (int) sv.getProperty ("colour", -1);
+            addSpawn ({ x, y }, colour);
         }
     }
 }

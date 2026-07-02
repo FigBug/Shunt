@@ -38,9 +38,22 @@ private:
     void  checkCoupling   (Player& p);
     void  checkScoring    (Player& p);
     void  placeInitialCars();
+    void  placeCarsFromSpawns();   // used when the level defines explicit spawns
     struct SpawnInfo { TrackPos pos; int dir; };
     SpawnInfo spawnPosNearDropOff (int dropOffIndex) const;
     bool  isSwitchOccupied (int switchNode) const;
+    // True when this player's own engine or cars foul the switch node.
+    bool  trainFoulsSwitch (const Player& p, int switchNode) const;
+    // True when another train shares the mover's segment and sits closer to
+    // the switch node — that train has the right to the switch, so the mover
+    // may not throw it.
+    bool  isSwitchBlockedByCloserTrain (const Player& mover, int switchNode) const;
+    // True when any engine other than seeker (or its coupled cars) sits within
+    // [lo, hi] on the given segment.
+    bool  otherEngineInWindow (const Player& seeker, int segment, float lo, float hi) const;
+    // True when another engine sits on the route from seeker to target, i.e.
+    // between the AI and the car it wants — a reason to give up on that car.
+    bool  engineBlocksTarget (const Player& seeker, TrackPos target) const;
 
     TrackGraph           track;
     PhysicsEngine        physics;
@@ -56,6 +69,13 @@ private:
     static constexpr float kEngineMass    = 3.0f;
     static constexpr float kCarMass       = 1.0f;
     static constexpr float kCarFriction   = 2.0f;
+    // Tractive / braking forces. Acceleration = force / mass, so heavier
+    // consists build and shed speed more slowly. Powering under throttle,
+    // coasting with no throttle, and braking with reverse throttle each use a
+    // different force: coast < power < brake.
+    static constexpr float kEngineForce   = 24.0f;
+    static constexpr float kCoastForce    = 6.0f;
+    static constexpr float kBrakeForce    = 36.0f;
     static constexpr float kCoupleDistance = 0.5f;
     static constexpr float kScoreDistance  = 2.5f;
     static constexpr int   kMaxConsist     = 100;

@@ -32,6 +32,9 @@ struct AiBrain
     std::vector<int> path;
     int pathDir = 1;
     int lastSeg = -1;
+    bool waiting = false;   // holding position (e.g. the drop-off is blocked)
+    int dirSign = 0;        // last commanded travel direction (+1/-1)
+    float dirTimer = 0.0f;  // lockout before the direction may flip again
 };
 
 struct Player
@@ -43,6 +46,7 @@ struct Player
     TrackPos pos;
     int dir = 1;
     int bodyId = -1;
+    int prevSegment = -1;   // engine segment last frame, for detecting crossings
 
     std::vector<int> frontCars;
     std::vector<int> rearCars;

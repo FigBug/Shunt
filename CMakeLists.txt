@@ -121,3 +121,57 @@ if (WIN32)
 	set_property (TARGET ${GAME_NAME} APPEND_STRING PROPERTY LINK_FLAGS_DEBUG " /INCREMENTAL:NO")
 	set_target_properties (${GAME_NAME} PROPERTIES LINK_FLAGS "/ignore:4099")
 endif()
+
+# ════════════════════════════════════════════════════════════════════════════
+# Level editor — a separate GUI app for authoring track layouts.
+# ════════════════════════════════════════════════════════════════════════════
+set (EDITOR_NAME ShuntEditor)
+
+juce_add_gui_app (${EDITOR_NAME}
+                  PRODUCT_NAME "Shunt Level Editor"
+                  VERSION ${GAME_VERSION}
+                  COMPANY_NAME SocaLabs
+                  COMPANY_WEBSITE "https://socalabs.com/"
+                  BUNDLE_ID com.socalabs.shunteditor)
+
+file (GLOB_RECURSE editor_source_files CONFIGURE_DEPENDS
+	${CMAKE_CURRENT_SOURCE_DIR}/Editor/*.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/Editor/*.h)
+
+target_sources (${EDITOR_NAME} PRIVATE ${editor_source_files})
+source_group (TREE ${CMAKE_CURRENT_SOURCE_DIR}/Editor PREFIX Editor FILES ${editor_source_files})
+
+juce_generate_juce_header (${EDITOR_NAME})
+
+target_compile_definitions (${EDITOR_NAME} PRIVATE
+	JUCE_WEB_BROWSER=0
+	JUCE_USE_CURL=0
+	JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:${EDITOR_NAME},JUCE_PROJECT_NAME>"
+	JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:${EDITOR_NAME},JUCE_VERSION>"
+	_CRT_SECURE_NO_WARNINGS
+)
+
+target_link_libraries (${EDITOR_NAME} PRIVATE
+	juce::juce_core
+	juce::juce_data_structures
+	juce::juce_events
+	juce::juce_graphics
+	juce::juce_gui_basics
+	juce::juce_gui_extra
+
+	juce::juce_recommended_config_flags
+	juce::juce_recommended_lto_flags
+	juce::juce_recommended_warning_flags
+)
+
+if (APPLE)
+	set_target_properties (${EDITOR_NAME} PROPERTIES
+		XCODE_ATTRIBUTE_CLANG_LINK_OBJC_RUNTIME NO
+		XCODE_ATTRIBUTE_ONLY_ACTIVE_ARCH[variant=Debug] "YES"
+		XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT[variant=Release] "dwarf-with-dsym")
+endif()
+
+if (WIN32)
+	set_property (TARGET ${EDITOR_NAME} APPEND_STRING PROPERTY LINK_FLAGS_DEBUG " /INCREMENTAL:NO")
+	set_target_properties (${EDITOR_NAME} PROPERTIES LINK_FLAGS "/ignore:4099")
+endif()

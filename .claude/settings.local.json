@@ -71,7 +71,31 @@
       "Bash(pkill -f Shunt.app/Contents/MacOS/Shunt)",
       "Bash(osascript -e 'tell application \"Shunt\" to id of window 1')",
       "Bash(/usr/bin/python3 -c \"import Quartz; print\\('ok'\\)\")",
-      "Read(//usr/bin/**)"
+      "Read(//usr/bin/**)",
+      "Bash(cmake --build Builds/xcode --config Debug --target Shunt)",
+      "Bash(cmake --build Builds/xcode --target ShuntEditor --config Debug)",
+      "Bash(touch ../../Editor/EditorCanvas.cpp)",
+      "Bash(cmake --build . --target ShuntEditor --config Debug)",
+      "Bash(screencapture -x /tmp/shunt1.png)",
+      "Bash(cmake --build /Users/rrabien/dev.github/Shunt/Builds/xcode --target ShuntEditor --config Debug)",
+      "Bash(osascript -e 'tell application \"System Events\" to get name of \\(processes whose name contains \"Shunt Level Editor\"\\)')",
+      "Bash(screencapture -o -x /tmp/shunt_editor.png)",
+      "Bash(osascript -e 'tell application \"Shunt Level Editor\" to activate')",
+      "Bash(osascript -e 'tell application \"System Events\" to tell process \"Shunt Level Editor\" to set frontmost to true')",
+      "Bash(pkill -f \"Shunt Level Editor\")",
+      "Bash(rm -f /tmp/railgraph_out.json \"/tmp/Jinryō_out.json\" /tmp/shunt_editor.png)",
+      "Bash(cmake --build /Users/rrabien/dev.github/Shunt/Builds/xcode --target Shunt --config Debug)",
+      "Bash(osascript -e 'tell application \"System Events\" to tell process \"Shunt Level Editor\" to get {position, size} of window 1')",
+      "Bash(osascript -e 'tell application \"System Events\" to tell process \"Shunt Level Editor\" to perform action \"AXRaise\" of window 1')",
+      "Bash(screencapture -o -x -R640,123,1280,120 /tmp/toolbar.png)",
+      "Bash(osascript -e 'tell application \"System Events\" to tell process \"Shunt\" to perform action \"AXRaise\" of window 1')",
+      "Bash(osascript -e 'tell application \"System Events\" to tell process \"Shunt\" to get {position, size} of window 1')",
+      "Bash(osascript -e 'tell application \"System Events\" to get name of every process whose background only is false')",
+      "Bash(osascript -e 'tell application \"System Events\" to tell process \"Shunt\" to set frontmost to true')",
+      "Bash(screencapture -o -x /tmp/shunt_game.png)",
+      "Bash(osascript *)",
+      "Bash(screencapture -o -x -R640,163,1280,752 /tmp/shunt_yard.png)",
+      "Bash(pkill -f \"MacOS/Shunt\")"
     ]
   }
 }

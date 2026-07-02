@@ -116,8 +116,46 @@ void GameState::spawnAi (int slot)
     players.push_back (std::move (p));
 }
 
+void GameState::placeCarsFromSpawns()
+{
+    const auto& spawns = track.getSpawns();
+    int n = (int) spawns.size();
+
+    // Balanced, shuffled colour pool for spawns that don't pin a colour, so an
+    // all-default level still gets an even spread of the four car colours.
+    std::vector<CarColour> pool;
+    for (int i = 0; i < n; ++i)
+        pool.push_back ((CarColour) (i % (int) CarColour::count));
+    for (int i = n - 1; i > 0; --i)
+        std::swap (pool[(size_t) i], pool[(size_t) rng().nextInt (i + 1)]);
+
+    int poolIdx = 0;
+    for (const auto& sp : spawns)
+    {
+        auto tp = track.nearestTrackPos (sp.pos);
+
+        Car car;
+        car.id     = nextCarId++;
+        car.colour = (sp.colour >= 0 && sp.colour < (int) CarColour::count)
+                        ? (CarColour) sp.colour
+                        : pool[(size_t) (poolIdx++ % juce::jmax (1, n))];
+        car.pos    = tp;
+        car.dir    = 1;
+        car.free   = true;
+        car.bodyId = physics.addBody (tp.segment, tp.distance, 1, kCarMass, kCarFriction);
+        cars.push_back (car);
+    }
+}
+
 void GameState::placeInitialCars()
 {
+    // Prefer explicit spawns authored in the level editor when the level has any.
+    if (! track.getSpawns().empty())
+    {
+        placeCarsFromSpawns();
+        return;
+    }
+
     // Find dead-end spur segments: reverse segments of switches that end at
     // a node with only one connected segment (a buffer stop).
     struct SpurInfo { int segment; int bufferNode; float length; float bufferDist; };
@@ -259,8 +297,8 @@ void GameState::update (float dt, gin::GameControllerManager& controllers)
 
                 speed = throttle * kTrainSpeed;
 
-                bool toggleFwd  = c->isButtonDown (B::faceDown);    // A = switch ahead
-                bool toggleBack = c->isButtonDown (B::faceRight);   // B = switch behind
+                bool toggleFwd  = c->isButtonDown (B::faceRight);   // B = switch ahead
+                bool toggleBack = c->isButtonDown (B::faceDown);    // A = switch behind
                 bool uncouple   = c->isButtonDown (B::faceUp);      // Y = decouple
 
                 toggleFwdEdge  = toggleFwd  && ! p.prevToggleFwd;
@@ -272,17 +310,32 @@ void GameState::update (float dt, gin::GameControllerManager& controllers)
             }
         }
 
-        handleActions (p, speed, toggleFwdEdge, toggleBackEdge, uncoupleEdge);
-
-        // Engine desired speed comes from the throttle; the collision
-        // boundary extends over the coupled cars on each side
+        // The throttle sets a *target* speed; the engine ramps toward it. The
+        // collision boundary extends over the coupled cars on each side.
+        float actualSpeed = speed;
         if (auto* b = physics.findBody (p.bodyId))
         {
-            b->speed      = speed;
             b->mass       = kEngineMass + (float) p.totalCars() * kCarMass;
             b->radiusFwd  = kVehicleHalfLen + (float) p.frontCars.size() * kCarSpacing;
             b->radiusBack = kVehicleHalfLen + (float) p.rearCars.size()  * kCarSpacing;
+
+            // Choose the force driving the change: powering under throttle,
+            // coasting with no throttle, or braking when throttle opposes
+            // current motion. Acceleration = force / mass, so a heavy consist
+            // changes speed slowly.
+            float cur  = b->speed;
+            bool coasting  = (speed == 0.0f);
+            bool reversing = (speed != 0.0f && cur != 0.0f && (speed > 0.0f) != (cur > 0.0f));
+            float force = coasting ? kCoastForce : (reversing ? kBrakeForce : kEngineForce);
+
+            float maxDv = force / b->mass * dt;
+            b->speed = cur + juce::jlimit (-maxDv, maxDv, speed - cur);
+            actualSpeed = b->speed;
         }
+
+        // Decoupled cars inherit the engine's actual speed, so resolve actions
+        // after the ramp.
+        handleActions (p, actualSpeed, toggleFwdEdge, toggleBackEdge, uncoupleEdge);
     }
 
     physics.step (track, dt);
@@ -294,6 +347,19 @@ void GameState::update (float dt, gin::GameControllerManager& controllers)
         {
             p.pos = { b->segment, b->distance };
             p.dir = b->dir;
+
+            // A train trailing through a switch (leg -> stem) forces the points
+            // to the leg it came from. This also keeps the trailing cars — whose
+            // positions are derived by advancing across the switch — on their
+            // real track instead of snapping onto the other leg.
+            if (p.prevSegment >= 0 && p.prevSegment != p.pos.segment)
+            {
+                for (auto& sw : track.getSwitches())
+                    if (p.pos.segment == sw.stemSegment
+                        && (p.prevSegment == sw.normalSegment || p.prevSegment == sw.reverseSegment))
+                        sw.reversed = (p.prevSegment == sw.reverseSegment);
+            }
+            p.prevSegment = p.pos.segment;
 
             if (p.recoupleLock)
             {
@@ -337,7 +403,8 @@ void GameState::handleActions (Player& p, float engineSpeed, bool toggleFwd, boo
         {
             if (auto* sw = track.findSwitch (*switchNode))
             {
-                if (sw->cooldown <= 0.0f && ! isSwitchOccupied (*switchNode))
+                if (sw->cooldown <= 0.0f && ! isSwitchOccupied (*switchNode)
+                    && ! isSwitchBlockedByCloserTrain (p, *switchNode))
                 {
                     sw->reversed = ! sw->reversed;
                     sw->cooldown = 0.5f;
@@ -486,11 +553,8 @@ void GameState::checkScoring (Player& p)
     }
 }
 
-bool GameState::isSwitchOccupied (int switchNode) const
+bool GameState::trainFoulsSwitch (const Player& p, int switchNode) const
 {
-    const auto* sw = track.findSwitch (switchNode);
-    if (sw == nullptr) return false;
-
     auto nodePos = track.getNode (switchNode).position;
     constexpr float kOccupyRadius = 1.2f;
 
@@ -502,23 +566,148 @@ bool GameState::isSwitchOccupied (int switchNode) const
         return track.worldPos (tp).getDistanceFrom (nodePos) < kOccupyRadius;
     };
 
-    for (const auto& p : players)
-    {
-        if (isNear (p.pos))
+    if (isNear (p.pos))
+        return true;
+
+    for (int i = 0; i < (int) p.frontCars.size(); ++i)
+        if (isNear (track.advance (p.pos, p.dir, (float) (i + 1) * kCarSpacing).pos))
             return true;
 
-        for (int i = 0; i < (int) p.frontCars.size(); ++i)
-            if (isNear (track.advance (p.pos, p.dir, (float) (i + 1) * kCarSpacing).pos))
+    for (int i = 0; i < (int) p.rearCars.size(); ++i)
+        if (isNear (track.advance (p.pos, -p.dir, (float) (i + 1) * kCarSpacing).pos))
+            return true;
+
+    return false;
+}
+
+bool GameState::isSwitchOccupied (int switchNode) const
+{
+    const auto* sw = track.findSwitch (switchNode);
+    if (sw == nullptr) return false;
+
+    for (const auto& p : players)
+        if (trainFoulsSwitch (p, switchNode))
+            return true;
+
+    auto nodePos = track.getNode (switchNode).position;
+    constexpr float kOccupyRadius = 1.2f;
+    for (const auto& c : cars)
+    {
+        if (! c.free) continue;
+        const auto& seg = track.getSegment (c.pos.segment);
+        if (seg.nodeA != switchNode && seg.nodeB != switchNode) continue;
+        if (track.worldPos (c.pos).getDistanceFrom (nodePos) < kOccupyRadius)
+            return true;
+    }
+
+    return false;
+}
+
+bool GameState::isSwitchBlockedByCloserTrain (const Player& mover, int switchNode) const
+{
+    const auto& seg = track.getSegment (mover.pos.segment);
+
+    // Only applies when the switch sits at an end of the mover's own segment.
+    float switchDist;
+    if (seg.nodeA == switchNode)      switchDist = 0.0f;
+    else if (seg.nodeB == switchNode) switchDist = seg.length;
+    else return false;
+
+    float myDist = std::abs (mover.pos.distance - switchDist);
+
+    for (const auto& other : players)
+    {
+        if (&other == &mover) continue;
+        if (other.pos.segment != mover.pos.segment) continue;
+
+        if (std::abs (other.pos.distance - switchDist) < myDist)
+            return true;
+    }
+
+    return false;
+}
+
+bool GameState::otherEngineInWindow (const Player& seeker, int segment, float lo, float hi) const
+{
+    auto inWin = [&] (TrackPos tp)
+    {
+        return tp.segment == segment && tp.distance >= lo && tp.distance <= hi;
+    };
+
+    for (const auto& other : players)
+    {
+        if (&other == &seeker) continue;
+
+        if (inWin (other.pos))
+            return true;
+
+        for (int i = 0; i < (int) other.frontCars.size(); ++i)
+            if (inWin (track.advance (other.pos, other.dir, (float) (i + 1) * kCarSpacing).pos))
                 return true;
 
-        for (int i = 0; i < (int) p.rearCars.size(); ++i)
-            if (isNear (track.advance (p.pos, -p.dir, (float) (i + 1) * kCarSpacing).pos))
+        for (int i = 0; i < (int) other.rearCars.size(); ++i)
+            if (inWin (track.advance (other.pos, -other.dir, (float) (i + 1) * kCarSpacing).pos))
                 return true;
     }
 
-    for (const auto& c : cars)
-        if (c.free && isNear (c.pos))
+    return false;
+}
+
+bool GameState::engineBlocksTarget (const Player& seeker, TrackPos target) const
+{
+    // Same segment: an engine blocks only if it sits between us and the car.
+    if (seeker.pos.segment == target.segment)
+    {
+        float lo = std::min (seeker.pos.distance, target.distance);
+        float hi = std::max (seeker.pos.distance, target.distance);
+        return otherEngineInWindow (seeker, seeker.pos.segment, lo, hi);
+    }
+
+    auto path = track.findPath (seeker.pos, seeker.dir, target).segments;
+    if (path.empty())
+        return false;   // no known route — let the normal logic deal with it
+
+    auto sharedNode = [&] (int segA, int segB)
+    {
+        const auto& a = track.getSegment (segA);
+        const auto& b = track.getSegment (segB);
+        if (a.nodeA == b.nodeA || a.nodeA == b.nodeB) return a.nodeA;
+        return a.nodeB;
+    };
+
+    for (int i = 0; i < (int) path.size(); ++i)
+    {
+        int seg = path[(size_t) i];
+        const auto& s = track.getSegment (seg);
+
+        // The stretch of this segment that lies on the route between us and
+        // the car. The first segment runs from our position to the exit node;
+        // the last runs from the entry node to the car; middle segments are
+        // traversed end to end.
+        float lo, hi;
+        if (i == 0)
+        {
+            int node = sharedNode (seg, path[1]);
+            float endDist = (s.nodeA == node) ? 0.0f : s.length;
+            lo = std::min (seeker.pos.distance, endDist);
+            hi = std::max (seeker.pos.distance, endDist);
+        }
+        else if (i == (int) path.size() - 1)
+        {
+            int node = sharedNode (seg, path[(size_t) i - 1]);
+            float startDist = (s.nodeA == node) ? 0.0f : s.length;
+            lo = std::min (startDist, target.distance);
+            hi = std::max (startDist, target.distance);
+        }
+        else
+        {
+            lo = 0.0f;
+            hi = s.length;
+        }
+
+        if (otherEngineInWindow (seeker, seg, lo, hi))
             return true;
+    }
 
     return false;
 }
@@ -557,6 +746,7 @@ float GameState::aiUpdate (Player& p, float dt)
 
     brain.thinkTimer -= dt;
     brain.switchCooldown -= dt;
+    brain.dirTimer -= dt;
 
     bool rethink = brain.thinkTimer <= 0.0f;
     if (rethink)
@@ -618,6 +808,13 @@ float GameState::aiUpdate (Player& p, float dt)
 
     if (brain.state == AiBrain::seekingCar)
     {
+        // Give up on a target that another engine has moved in to block.
+        if (rethink && brain.targetCarId >= 0 && engineBlocksTarget (p, brain.targetPos))
+        {
+            brain.targetCarId = -1;
+            brain.path.clear();
+        }
+
         if (rethink && brain.targetCarId < 0)
         {
             auto locoWorld = track.worldPos (p.pos);
@@ -627,6 +824,8 @@ float GameState::aiUpdate (Player& p, float dt)
             {
                 if (! c.free) continue;
                 if (p.hasColourLock && c.colour != p.carryColour)
+                    continue;
+                if (engineBlocksTarget (p, c.pos))   // another engine is in the way
                     continue;
                 float d = locoWorld.getDistanceFrom (track.worldPos (c.pos));
                 candidates.push_back ({ d, c.id });
@@ -682,6 +881,15 @@ float GameState::aiUpdate (Player& p, float dt)
 
         if (! hasTarget)
             return 0.0f;
+
+        // If another engine is sitting on the way to (or in) the drop-off,
+        // there's no alternative destination — hold position and wait for it
+        // to clear rather than shoving in.
+        if (rethink)
+            brain.waiting = engineBlocksTarget (p, brain.targetPos);
+
+        if (brain.waiting)
+            return 0.0f;
     }
 
     if (! hasTarget)
@@ -726,6 +934,24 @@ float GameState::aiUpdate (Player& p, float dt)
             moveDir = -1;  // go toward nodeA
         else
             moveDir = brain.pathDir;
+
+        // Runaround: reaching the next segment means crossing the switch at the
+        // shared node. If that switch isn't routed our way yet and our own
+        // train is fouling it, we can't throw it from here — so pull the other
+        // way to clear the switch first, then flip it, then come back through.
+        // ("go all the way past the switch, flip it, then reverse in.")
+        int exitNode = (moveDir == 1) ? curS.nodeB : curS.nodeA;
+        if (const auto* sw = track.findSwitch (exitNode))
+        {
+            int route = -1;
+            if (p.pos.segment == sw->stemSegment)
+                route = sw->reversed ? sw->reverseSegment : sw->normalSegment;
+            else if (p.pos.segment == sw->normalSegment || p.pos.segment == sw->reverseSegment)
+                route = sw->stemSegment;
+
+            if (route != nextSeg && trainFoulsSwitch (p, exitNode))
+                moveDir = -moveDir;   // pull away to clear the switch
+        }
     }
     else
     {
@@ -735,8 +961,10 @@ float GameState::aiUpdate (Player& p, float dt)
 
     float throttle = (moveDir == p.dir) ? 1.0f : -1.0f;
 
-    // Set switches along the path so the route is clear
-    if ((segChanged || brain.switchCooldown <= 0.0f) && brain.path.size() >= 2 && brain.switchCooldown <= 0.0f)
+    // Throw the next switch on the path so the route is clear. Like a human
+    // player, the AI may only work the switch it is about to reach — not
+    // switches further down the route.
+    if (brain.switchCooldown <= 0.0f && brain.path.size() >= 2)
     {
         for (size_t pi = (size_t) juce::jmax (0, pathIdx); pi + 1 < brain.path.size(); ++pi)
         {
@@ -752,40 +980,46 @@ float GameState::aiUpdate (Player& p, float dt)
             if (sharedNode < 0) continue;
 
             auto* sw = track.findSwitch (sharedNode);
-            if (sw == nullptr) continue;
-            if (sw->cooldown > 0.0f || isSwitchOccupied (sharedNode)) continue;
+            if (sw == nullptr) continue;   // plain junction/crossing — look ahead
 
-            int currentRoute = -1;
-            if (segA == sw->stemSegment)
-                currentRoute = sw->reversed ? sw->reverseSegment : sw->normalSegment;
-            else if (segA == sw->normalSegment)
-                currentRoute = sw->stemSegment;
-            else if (segA == sw->reverseSegment)
-                currentRoute = sw->stemSegment;
-
-            if (currentRoute == segB)
-                continue;
-
-            sw->reversed = ! sw->reversed;
-
-            int newRoute = -1;
-            if (segA == sw->stemSegment)
-                newRoute = sw->reversed ? sw->reverseSegment : sw->normalSegment;
-            else if (segA == sw->normalSegment)
-                newRoute = sw->stemSegment;
-            else if (segA == sw->reverseSegment)
-                newRoute = sw->stemSegment;
-
-            if (newRoute == segB)
+            // This is the next switch on the route. Whether or not we manage
+            // to throw it, stop here: the AI can't reach past it to switches
+            // further along.
+            if (canToggleSwitch (sharedNode) && ! isSwitchBlockedByCloserTrain (p, sharedNode))
             {
-                sw->cooldown = 0.5f;
-                brain.switchCooldown = 0.3f;
-                break;
+                int currentRoute = -1;
+                if (segA == sw->stemSegment)
+                    currentRoute = sw->reversed ? sw->reverseSegment : sw->normalSegment;
+                else if (segA == sw->normalSegment)
+                    currentRoute = sw->stemSegment;
+                else if (segA == sw->reverseSegment)
+                    currentRoute = sw->stemSegment;
+
+                if (currentRoute != segB)
+                {
+                    sw->reversed = ! sw->reversed;
+
+                    int newRoute = -1;
+                    if (segA == sw->stemSegment)
+                        newRoute = sw->reversed ? sw->reverseSegment : sw->normalSegment;
+                    else if (segA == sw->normalSegment)
+                        newRoute = sw->stemSegment;
+                    else if (segA == sw->reverseSegment)
+                        newRoute = sw->stemSegment;
+
+                    if (newRoute == segB)
+                    {
+                        sw->cooldown = 0.5f;
+                        brain.switchCooldown = 0.3f;
+                    }
+                    else
+                    {
+                        sw->reversed = ! sw->reversed; // revert
+                    }
+                }
             }
-            else
-            {
-                sw->reversed = ! sw->reversed; // revert
-            }
+
+            break;
         }
     }
 
@@ -803,7 +1037,26 @@ float GameState::aiUpdate (Player& p, float dt)
         brain.stuckCount = 0;
     }
 
-    return throttle * kTrainSpeed * 0.7f;
+    // Rate-limit direction changes so the AI can't hunt back and forth on a
+    // switch: once it commits to a direction it holds it for at least 0.5s.
+    int desiredDir = (throttle >= 0.0f) ? 1 : -1;
+    if (brain.dirSign == 0)
+    {
+        brain.dirSign  = desiredDir;
+        brain.dirTimer = 0.5f;
+    }
+    else if (desiredDir != brain.dirSign)
+    {
+        if (brain.dirTimer > 0.0f)
+            desiredDir = brain.dirSign;   // too soon — keep going the same way
+        else
+        {
+            brain.dirSign  = desiredDir;
+            brain.dirTimer = 0.5f;
+        }
+    }
+
+    return (float) desiredDir * kTrainSpeed * 0.7f;
 }
 
 } // namespace game
