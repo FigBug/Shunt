@@ -21,7 +21,7 @@ struct Car
 
 struct AiBrain
 {
-    enum State { idle, seekingCar, returningHome, leavingDropOff };
+    enum State { idle, seekingCar, returningHome, leavingDropOff, dumping };
     State state = idle;
     int targetCarId = -1;
     TrackPos targetPos;
@@ -35,6 +35,8 @@ struct AiBrain
     bool waiting = false;   // holding position (e.g. the drop-off is blocked)
     int dirSign = 0;        // last commanded travel direction (+1/-1)
     float dirTimer = 0.0f;  // lockout before the direction may flip again
+    int homeStuck = 0;      // rethinks parked at the drop-off without scoring
+    int lastCarCount = 0;   // consist size last rethink, to detect deliveries
 };
 
 struct Player

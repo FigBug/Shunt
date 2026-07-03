@@ -34,6 +34,7 @@ public:
 
 private:
     void  handleActions   (Player& p, float engineSpeed, bool toggleFwd, bool toggleBack, bool uncouple);
+    void  decoupleAll     (Player& p, float engineSpeed);
     float aiUpdate        (Player& p, float dt);
     void  checkCoupling   (Player& p);
     void  checkScoring    (Player& p);
@@ -54,6 +55,11 @@ private:
     // True when another engine sits on the route from seeker to target, i.e.
     // between the AI and the car it wants — a reason to give up on that car.
     bool  engineBlocksTarget (const Player& seeker, TrackPos target) const;
+    // Drop-off node for a colour, or -1 if none.
+    int   dropOffNodeFor (int colourIndex) const;
+    // True when picking up this car would put it on the deliverable side — the
+    // engine can push it toward its drop-off rather than drag it away.
+    bool  isRightSidePickup (const Player& p, juce::Point<float> carWorld, int colourIndex) const;
 
     TrackGraph           track;
     PhysicsEngine        physics;
