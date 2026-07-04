@@ -1,2 +1,8 @@
+0.0.2:
+- Level editor for authoring track, switches, spawns and drop-offs
+- Title-screen map selector; remembers the last-played map
+- Esc returns to the main menu
+- Level-wide car count spread across spawn points, avoiding switches
+
 0.0.1:
 - Initial version

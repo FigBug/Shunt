@@ -121,11 +121,53 @@ void GameState::spawnAi (int slot)
     players.push_back (std::move (p));
 }
 
+float GameState::distanceToSwitch (TrackPos start, int dir, float limit) const
+{
+    int   seg     = start.segment;
+    int   d       = dir;
+    float posDist = start.distance;
+    float dist    = 0.0f;
+
+    for (int steps = 0; steps < 30; ++steps)
+    {
+        const auto& s = track.getSegment (seg);
+        int nodeAhead = (d > 0) ? s.nodeB : s.nodeA;
+
+        dist += (d > 0) ? (s.length - posDist) : posDist;
+        if (dist > limit)
+            return limit;
+        if (track.findSwitch (nodeAhead) != nullptr)
+            return dist;
+
+        int next = track.routeThrough (seg, nodeAhead);   // walk through plain junctions
+        if (next < 0)
+            return limit;                                 // dead end this way
+
+        const auto& ns = track.getSegment (next);
+        d       = (ns.nodeA == nodeAhead) ? 1 : -1;
+        posDist = (d > 0) ? 0.0f : ns.length;
+        seg     = next;
+    }
+    return limit;
+}
+
 void GameState::placeCarsFromSpawns()
 {
-    const auto& spawns = track.getSpawns();
-    int numSpawns = (int) spawns.size();
-    if (numSpawns == 0) return;
+    const float carLen          = kCarSpacing;
+    const float switchClearance = 2.0f * carLen;
+
+    // Resolve spawns to track positions, dropping any that sit within two car
+    // lengths of a switch (a car there would foul the points).
+    std::vector<TrackPos> validSpawns;
+    for (const auto& sp : track.getSpawns())
+    {
+        auto tp = track.nearestTrackPos (sp.pos);
+        bool nearSwitch = distanceToSwitch (tp, 1, switchClearance) < switchClearance
+                       || distanceToSwitch (tp, -1, switchClearance) < switchClearance;
+        if (! nearSwitch)
+            validSpawns.push_back (tp);
+    }
+    if (validSpawns.empty()) return;
 
     int total = juce::jmax (0, track.getCarCount());
     if (total == 0) return;
@@ -138,24 +180,48 @@ void GameState::placeCarsFromSpawns()
     for (int i = total - 1; i > 0; --i)
         std::swap (pool[(size_t) i], pool[(size_t) rng().nextInt (i + 1)]);
 
-    // Randomly assign each car to a spawn. Multiple cars on one spawn are lined
-    // up along the rail so they don't overlap.
-    std::vector<int> perSpawn ((size_t) numSpawns, 0);
+    std::vector<juce::Point<float>> occupied;
+    auto isFree = [&] (juce::Point<float> w)
+    {
+        for (const auto& o : occupied)
+            if (o.getDistanceFrom (w) < carLen * 0.9f)
+                return false;
+        return true;
+    };
 
     for (int i = 0; i < total; ++i)
     {
-        int si = rng().nextInt (numSpawns);
-        auto base = track.nearestTrackPos (spawns[(size_t) si].pos);
-        auto placed = track.advance (base, 1, (float) perSpawn[(size_t) si] * kCarSpacing);
-        perSpawn[(size_t) si]++;
+        auto base = validSpawns[(size_t) rng().nextInt ((int) validSpawns.size())];
+
+        // Search outward from the spawn in both directions for the closest free
+        // slot, so cars fill the rail either side without overlapping.
+        TrackPos slot;
+        bool found = false;
+        for (int step = 0; step < 40 && ! found; ++step)
+        {
+            int dirsToTry = (step == 0) ? 1 : 2;
+            for (int k = 0; k < dirsToTry && ! found; ++k)
+            {
+                int dir = (k == 0) ? 1 : -1;
+                auto cand = track.advance (base, dir, (float) step * carLen);
+                if (isFree (track.worldPos (cand.pos)))
+                {
+                    slot = cand.pos;
+                    found = true;
+                }
+            }
+        }
+        if (! found) continue;   // spawn's rail is full — skip this car
+
+        occupied.push_back (track.worldPos (slot));
 
         Car car;
         car.id     = nextCarId++;
         car.colour = pool[(size_t) i];
-        car.pos    = placed.pos;
+        car.pos    = slot;
         car.dir    = 1;
         car.free   = true;
-        car.bodyId = physics.addBody (placed.pos.segment, placed.pos.distance, 1, kCarMass, kCarFriction);
+        car.bodyId = physics.addBody (slot.segment, slot.distance, 1, kCarMass, kCarFriction);
         cars.push_back (car);
     }
 }

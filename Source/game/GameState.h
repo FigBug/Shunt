@@ -40,6 +40,9 @@ private:
     void  checkScoring    (Player& p);
     void  placeInitialCars();
     void  placeCarsFromSpawns();   // used when the level defines explicit spawns
+    // Distance along the track from `start` in `dir` to the nearest switch,
+    // capped at `limit`. Used to reject spawn points that sit on top of a switch.
+    float distanceToSwitch (TrackPos start, int dir, float limit) const;
     struct SpawnInfo { TrackPos pos; int dir; };
     SpawnInfo spawnPosNearDropOff (int dropOffIndex) const;
     bool  isSwitchOccupied (int switchNode) const;
