@@ -15,6 +15,7 @@ public:
     ~EditorComponent() override;
 
     bool loadFile (const juce::File&);   // load a level (used for CLI / drag-open)
+    bool openLastFile();                 // reopen the last-edited level, if any
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -26,6 +27,9 @@ private:
     void newLevel();
     void openLevel();
     void saveLevel (bool forceChooser);
+    void weldLevel();
+    void refreshCarsField();
+    void rememberFile (const juce::File&);   // persist as the last-edited level
 
     LevelDocument doc;
     EditorCanvas  canvas { doc };
@@ -37,11 +41,15 @@ private:
     juce::TextButton saveButton { "Save" };
     juce::TextButton saveAsButton { "Save As" };
     juce::TextButton frameButton { "Frame (F)" };
+    juce::TextButton weldButton { "Weld" };
+    juce::Label carsCaption { {}, "Cars:" };
+    juce::Label carsField;              // editable total-car count
 
     juce::Label statusBar;
 
     juce::File currentFile;
     std::unique_ptr<juce::FileChooser> chooser;
+    std::unique_ptr<juce::PropertiesFile> settings;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (EditorComponent)
 };

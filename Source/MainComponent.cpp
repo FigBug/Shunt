@@ -7,7 +7,18 @@ namespace
 
 MainComponent::MainComponent()
 {
-    titleScreen = std::make_unique<view::TitleScreen> (controllers, savedNumPlayers);
+    juce::PropertiesFile::Options opts;
+    opts.applicationName     = "Shunt";
+    opts.filenameSuffix      = "settings";
+    opts.osxLibrarySubFolder = "Application Support";
+    settings = std::make_unique<juce::PropertiesFile> (opts);
+
+    savedMapIndex = settings->getIntValue ("mapIndex", 0);   // remembered from last session
+
+    if (auto* m = std::getenv ("SHUNT_MAP"))   // dev hook: preselect a map for testing
+        savedMapIndex = juce::String (m).getIntValue();
+
+    titleScreen = std::make_unique<view::TitleScreen> (controllers, savedNumPlayers, 1.0f, savedMapIndex);
     addAndMakeVisible (*titleScreen);
 
     setWantsKeyboardFocus (true);
@@ -24,6 +35,13 @@ void MainComponent::startGame()
 
     int numPlayers = titleScreen->getNumPlayers();
     savedNumPlayers = numPlayers;
+    savedMapIndex = titleScreen->getMapIndex();
+
+    if (settings != nullptr)   // remember the chosen map for next launch
+    {
+        settings->setValue ("mapIndex", savedMapIndex);
+        settings->saveIfNeeded();
+    }
 
     bool slotHasController[4] {};
     for (int i = 0; i < 4; ++i)
@@ -32,7 +50,7 @@ void MainComponent::startGame()
     removeChildComponent (titleScreen.get());
     titleScreen.reset();
 
-    state = std::make_unique<game::GameState> (numPlayers);
+    state = std::make_unique<game::GameState> (numPlayers, savedMapIndex);
 
     for (int i = 0; i < numPlayers; ++i)
     {
@@ -46,12 +64,22 @@ void MainComponent::startGame()
     addAndMakeVisible (*gameView);
     addAndMakeVisible (*hud);
     resized();
+
+    // The title screen held keyboard focus; take it back so in-game keys
+    // (e.g. Esc to return to the menu) reach MainComponent::keyPressed.
+    grabKeyboardFocus();
 }
 
 bool MainComponent::keyPressed (const juce::KeyPress& key)
 {
     if (inGame && state)
     {
+        if (key == juce::KeyPress::escapeKey)
+        {
+            returnToTitle();
+            return true;
+        }
+
         if (state->isGameOver())
         {
             returnToTitle();
@@ -144,7 +172,7 @@ void MainComponent::returnToTitle()
     hud.reset();
     state.reset();
 
-    titleScreen = std::make_unique<view::TitleScreen> (controllers, savedNumPlayers);
+    titleScreen = std::make_unique<view::TitleScreen> (controllers, savedNumPlayers, 1.0f, savedMapIndex);
     addAndMakeVisible (*titleScreen);
     resized();
     grabKeyboardFocus();

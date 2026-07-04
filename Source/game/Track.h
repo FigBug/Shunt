@@ -75,6 +75,10 @@ public:
     void addSpawn (juce::Point<float> pos, int colour);
     const std::vector<SpawnPoint>& getSpawns() const { return spawns; }
 
+    // Total cars for the level, spread randomly across the spawn points. Falls
+    // back to the spawn count when the level doesn't specify one.
+    int getCarCount() const { return carCount; }
+
     // Snap a world point onto the nearest track segment, returning the closest
     // position on the graph. Used to resolve authored spawn points to TrackPos.
     TrackPos nearestTrackPos (juce::Point<float> world) const;
@@ -133,6 +137,7 @@ private:
     std::vector<SidingInfo>   sidings;
     std::vector<DropOffZone>  dropOffs;
     std::vector<SpawnPoint>   spawns;
+    int carCount = 0;
     int mainLineEnd = -1;
 
     std::vector<int> segmentsAtNode (int node) const;

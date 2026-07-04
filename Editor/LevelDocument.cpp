@@ -41,7 +41,11 @@ int LevelDocument::addSegment (int from, int to, bool curved)
 void LevelDocument::addRoundedRectLoop (juce::Rectangle<float> b, float radius)
 {
     const float L = b.getX(), R = b.getRight(), T = b.getY(), B = b.getBottom();
-    const float r = juce::jlimit (1.0f, juce::jmin (b.getWidth(), b.getHeight()) * 0.5f, radius);
+    // Radius must stay within [0, half the shorter side]. Prefer at least 1 unit
+    // so corners aren't degenerate, but never let the lower bound exceed the
+    // upper (that would trip jlimit's assert on a tiny rect).
+    const float maxR = juce::jmin (b.getWidth(), b.getHeight()) * 0.5f;
+    const float r = juce::jlimit (juce::jmin (1.0f, maxR), maxR, radius);
 
     // Eight tangent points, clockwise from the top-left of the top edge.
     int n0 = addNode ({ L + r, T });
@@ -67,6 +71,163 @@ void LevelDocument::addRoundedRectLoop (juce::Rectangle<float> b, float radius)
     corner     (n5, n6, { L, B });       // bottom-left
     addSegment (n6, n7, false);          // left
     corner     (n7, n0, { L, T });       // top-left
+}
+
+void LevelDocument::mergeNode (int fromId, int intoId)
+{
+    if (fromId == intoId || findNode (fromId) == nullptr || findNode (intoId) == nullptr)
+        return;
+
+    // Reattach every segment on `fromId` to `intoId`.
+    for (auto& s : segments)
+    {
+        if (s.from == fromId) s.from = intoId;
+        if (s.to   == fromId) s.to   = intoId;
+    }
+
+    // Drop self-loops created by the merge.
+    segments.erase (std::remove_if (segments.begin(), segments.end(),
+        [] (const EdSegment& s) { return s.from == s.to; }),
+        segments.end());
+
+    // De-duplicate segments that now connect the same pair of nodes.
+    std::vector<EdSegment> kept;
+    for (const auto& s : segments)
+    {
+        bool dup = false;
+        for (const auto& k : kept)
+            if ((k.from == s.from && k.to == s.to) || (k.from == s.to && k.to == s.from))
+                { dup = true; break; }
+        if (! dup) kept.push_back (s);
+    }
+    segments = std::move (kept);
+
+    // Move any drop-off onto the surviving node, then collapse duplicates.
+    for (auto& d : dropOffs)
+        if (d.node == fromId) d.node = intoId;
+    std::vector<EdDropOff> keptDrops;
+    for (const auto& d : dropOffs)
+    {
+        bool dup = false;
+        for (const auto& k : keptDrops)
+            if (k.node == d.node) { dup = true; break; }
+        if (! dup) keptDrops.push_back (d);
+    }
+    dropOffs = std::move (keptDrops);
+
+    // Finally remove the folded-away node (its segments already moved).
+    nodes.erase (std::remove_if (nodes.begin(), nodes.end(),
+        [fromId] (const EdNode& n) { return n.id == fromId; }),
+        nodes.end());
+}
+
+int LevelDocument::splitSegment (int segId, float t, int useNodeId)
+{
+    auto* s = findSegment (segId);
+    if (s == nullptr) return -1;
+    const auto* an = findNode (s->from);
+    const auto* bn = findNode (s->to);
+    if (an == nullptr || bn == nullptr) return -1;
+
+    t = juce::jlimit (0.001f, 0.999f, t);
+    const int from = s->from, to = s->to;
+    const bool curved = s->curved;
+    const auto A = an->pos, B = bn->pos, C = s->control;
+
+    auto lerp = [] (juce::Point<float> p, juce::Point<float> q, float u) { return p + (q - p) * u; };
+
+    juce::Point<float> splitPos, ctrl1, ctrl2;
+    if (curved)
+    {
+        // de Casteljau: split a quadratic bezier at t into two quadratics.
+        ctrl1    = lerp (A, C, t);
+        ctrl2    = lerp (C, B, t);
+        splitPos = lerp (ctrl1, ctrl2, t);
+    }
+    else
+    {
+        splitPos = lerp (A, B, t);
+    }
+
+    int mid;
+    if (useNodeId >= 0 && findNode (useNodeId) != nullptr)
+    {
+        mid = useNodeId;
+        findNode (useNodeId)->pos = splitPos;   // pull the node exactly onto the track
+    }
+    else
+    {
+        mid = addNode (splitPos);
+    }
+
+    // addNode may have reallocated; re-find the segment before mutating it.
+    s = findSegment (segId);
+    s->to = mid;
+    if (curved) s->control = ctrl1;
+
+    EdSegment ns;
+    ns.id      = nextSegmentId++;
+    ns.from    = mid;
+    ns.to      = to;
+    ns.curved  = curved;
+    ns.control = ctrl2;
+    segments.push_back (ns);
+
+    juce::ignoreUnused (from);
+    return mid;
+}
+
+int LevelDocument::weldLooseEnds (float tolerance)
+{
+    int welded = 0;
+
+    std::vector<int> ids;
+    ids.reserve (nodes.size());
+    for (const auto& n : nodes) ids.push_back (n.id);
+
+    for (int nid : ids)
+    {
+        if (nodeDegree (nid) > 1) continue;        // only loose ends / isolated nodes
+        const auto* n = findNode (nid);
+        if (n == nullptr) continue;
+        auto p = n->pos;
+
+        int   bestSeg = -1;
+        float bestDist = tolerance;
+        float bestT = 0.0f;
+
+        for (const auto& s : segments)
+        {
+            if (s.from == nid || s.to == nid) continue;   // skip incident segments
+            auto poly = polylineFor (s);
+            int m = (int) poly.size();
+            for (int i = 0; i + 1 < m; ++i)
+            {
+                auto a = poly[(size_t) i], b = poly[(size_t) (i + 1)];
+                auto d = b - a;
+                float len2 = d.x * d.x + d.y * d.y;
+                float lt = len2 > 0.0f
+                    ? juce::jlimit (0.0f, 1.0f, ((p.x - a.x) * d.x + (p.y - a.y) * d.y) / len2)
+                    : 0.0f;
+                auto pr = a + d * lt;
+                float dist = pr.getDistanceFrom (p);
+                if (dist < bestDist)
+                {
+                    bestDist = dist;
+                    bestSeg  = s.id;
+                    bestT    = ((float) i + lt) / (float) (m - 1);
+                }
+            }
+        }
+
+        if (bestSeg >= 0)
+        {
+            splitSegment (bestSeg, bestT, nid);
+            ++welded;
+        }
+    }
+
+    return welded;
 }
 
 void LevelDocument::removeNode (int id)
@@ -97,6 +258,7 @@ void LevelDocument::clear()
     segments.clear();
     dropOffs.clear();
     spawns.clear();
+    totalCars = 20;
     nextNodeId = 0;
     nextSegmentId = 0;
 }
@@ -304,6 +466,8 @@ juce::String LevelDocument::toJsonString() const
     }
     root->setProperty ("spawns", spawnArr);
 
+    root->setProperty ("car_count", totalCars);
+
     return juce::JSON::toString (juce::var (root.get()), false);
 }
 
@@ -418,6 +582,11 @@ bool LevelDocument::loadFromString (const juce::String& json)
             spawns.push_back ({ { (float) (double) sv.getProperty ("x", 0.0),
                                   (float) (double) sv.getProperty ("y", 0.0) },
                                 (int) sv.getProperty ("colour", -1) });
+
+    // Total car count; default to one per spawn for levels authored before it.
+    totalCars = root.hasProperty ("car_count")
+                  ? (int) root.getProperty ("car_count", 0)
+                  : (int) spawns.size();
 
     return true;
 }

@@ -27,19 +27,41 @@ public:
             return;
         }
 
+        // Headless weld: --weld <in.json> <out.json> [tolerance]
+        // Connects loose track ends / drop-offs, then re-serialises.
+        if ((args.size() == 3 || args.size() == 4) && args[0] == "--weld")
+        {
+            LevelDocument doc;
+            if (doc.loadFromString (juce::File (args[1]).loadFileAsString()))
+            {
+                float tol = args.size() == 4 ? args[3].getFloatValue() : 10.0f;
+                doc.weldLooseEnds (tol);
+                juce::File (args[2]).replaceWithText (doc.toJsonString());
+            }
+            setApplicationReturnValue (0);
+            quit();
+            return;
+        }
+
         mainWindow = std::make_unique<MainWindow> (getApplicationName());
 
+        auto* ec = dynamic_cast<EditorComponent*> (mainWindow->getContentComponent());
+
         // Open a level passed on the command line (or via "open with").
+        bool opened = false;
         for (const auto& a : args)
         {
             juce::File f (a);
             if (f.existsAsFile() && f.hasFileExtension ("json"))
             {
-                if (auto* ec = dynamic_cast<EditorComponent*> (mainWindow->getContentComponent()))
-                    ec->loadFile (f);
+                if (ec != nullptr) opened = ec->loadFile (f);
                 break;
             }
         }
+
+        // Otherwise reopen whatever was being edited last session.
+        if (! opened && ec != nullptr)
+            ec->openLastFile();
 
         juce::ignoreUnused (commandLine);
     }

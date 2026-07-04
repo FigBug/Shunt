@@ -56,6 +56,7 @@ public:
     std::vector<EdSegment>  segments;
     std::vector<EdDropOff>  dropOffs;
     std::vector<EdSpawn>    spawns;
+    int                     totalCars = 20;   // spread randomly across the spawns
 
     // ---- mutation ----------------------------------------------------------
     int  addNode (juce::Point<float> p);
@@ -68,6 +69,22 @@ public:
 
     void removeNode (int id);       // also removes attached segments + drop-offs
     void removeSegment (int id);
+    // Fold `fromId` into `intoId`: reattach its segments, drop the resulting
+    // self-loops / duplicate segments, move its drop-off, then delete it.
+    void mergeNode (int fromId, int intoId);
+
+    // Split a segment at parameter t (0..1 along it), producing a node in the
+    // middle so a third track can connect there (i.e. form a switch). Straight
+    // segments split into two straights; curves split exactly (de Casteljau).
+    // If useNodeId >= 0 that existing node becomes the split point (and is moved
+    // onto the track); otherwise a new node is created. Returns the mid node id.
+    int splitSegment (int segId, float t, int useNodeId = -1);
+
+    // Repair loose ends: for every node with <= 1 connection sitting within
+    // `tolerance` of another segment, split that segment onto it. Returns the
+    // number of welds made. Fixes tracks/drop-offs that look joined but aren't.
+    int weldLooseEnds (float tolerance);
+
     void clear();
 
     // ---- lookup ------------------------------------------------------------

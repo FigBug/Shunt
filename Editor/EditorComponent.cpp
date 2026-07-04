@@ -16,6 +16,12 @@ namespace
 
 EditorComponent::EditorComponent()
 {
+    juce::PropertiesFile::Options opts;
+    opts.applicationName     = "ShuntEditor";
+    opts.filenameSuffix      = "settings";
+    opts.osxLibrarySubFolder = "Application Support";
+    settings = std::make_unique<juce::PropertiesFile> (opts);
+
     addAndMakeVisible (canvas);
 
     for (const auto& td : kTools)
@@ -43,8 +49,27 @@ EditorComponent::EditorComponent()
     saveButton.onClick   = [this] { saveLevel (false); };
     saveAsButton.onClick = [this] { saveLevel (true); };
     frameButton.onClick  = [this] { canvas.frameAll(); };
-    for (auto* b : { &newButton, &openButton, &saveButton, &saveAsButton, &frameButton })
+    weldButton.onClick   = [this] { weldLevel(); };
+    for (auto* b : { &newButton, &openButton, &saveButton, &saveAsButton, &frameButton, &weldButton })
         addAndMakeVisible (b);
+
+    carsCaption.setColour (juce::Label::textColourId, juce::Colours::lightgrey);
+    carsCaption.setJustificationType (juce::Justification::centredRight);
+    carsCaption.setTooltip ("Total cars, spread randomly across the spawn points");
+    addAndMakeVisible (carsCaption);
+
+    carsField.setEditable (true);
+    carsField.setColour (juce::Label::backgroundColourId, juce::Colour::fromRGB (55, 58, 64));
+    carsField.setColour (juce::Label::textColourId, juce::Colours::white);
+    carsField.setJustificationType (juce::Justification::centred);
+    carsField.setTooltip ("Total cars, spread randomly across the spawn points");
+    carsField.onTextChange = [this]
+    {
+        doc.totalCars = juce::jmax (0, carsField.getText().getIntValue());
+        refreshCarsField();
+    };
+    addAndMakeVisible (carsField);
+    refreshCarsField();
 
     statusBar.setColour (juce::Label::backgroundColourId, juce::Colour::fromRGB (24, 26, 30));
     statusBar.setColour (juce::Label::textColourId, juce::Colours::lightgrey);
@@ -55,7 +80,7 @@ EditorComponent::EditorComponent()
     canvas.onToolChanged   = [this] { refreshToolButtons(); };
 
     selectTool (EditorCanvas::Tool::select);
-    setSize (1280, 800);
+    setSize (1400, 800);
 }
 
 EditorComponent::~EditorComponent() = default;
@@ -64,7 +89,9 @@ void EditorComponent::selectTool (EditorCanvas::Tool t)
 {
     canvas.setTool (t);
     refreshToolButtons();
-    canvas.grabKeyboardFocus();
+
+    if (isShowing() || isOnDesktop())
+        canvas.grabKeyboardFocus();
 }
 
 void EditorComponent::refreshToolButtons()
@@ -91,6 +118,7 @@ void EditorComponent::newLevel()
 {
     doc.clear();
     currentFile = juce::File();
+    refreshCarsField();
     canvas.frameAll();
     canvas.repaint();
 }
@@ -100,9 +128,27 @@ bool EditorComponent::loadFile (const juce::File& file)
     if (! file.existsAsFile() || ! doc.loadFromString (file.loadFileAsString()))
         return false;
     currentFile = file;
+    rememberFile (file);
+    refreshCarsField();
     canvas.frameAll();
     canvas.repaint();
     return true;
+}
+
+void EditorComponent::rememberFile (const juce::File& file)
+{
+    if (settings != nullptr && file != juce::File())
+    {
+        settings->setValue ("lastFile", file.getFullPathName());
+        settings->saveIfNeeded();
+    }
+}
+
+bool EditorComponent::openLastFile()
+{
+    if (settings == nullptr) return false;
+    juce::File f (settings->getValue ("lastFile"));
+    return f.existsAsFile() && loadFile (f);
 }
 
 void EditorComponent::openLevel()
@@ -117,6 +163,8 @@ void EditorComponent::openLevel()
         if (doc.loadFromString (file.loadFileAsString()))
         {
             currentFile = file;
+            rememberFile (file);
+            refreshCarsField();
             canvas.frameAll();
             canvas.repaint();
         }
@@ -135,7 +183,10 @@ void EditorComponent::saveLevel (bool forceChooser)
         if (! file.hasFileExtension ("json"))
             file = file.withFileExtension ("json");
         if (file.replaceWithText (doc.toJsonString()))
+        {
             currentFile = file;
+            rememberFile (file);
+        }
     };
 
     if (! forceChooser && currentFile != juce::File())
@@ -158,6 +209,20 @@ void EditorComponent::saveLevel (bool forceChooser)
         if (file != juce::File())
             write (file);
     });
+}
+
+void EditorComponent::refreshCarsField()
+{
+    carsField.setText (juce::String (doc.totalCars), juce::dontSendNotification);
+}
+
+void EditorComponent::weldLevel()
+{
+    int n = canvas.weldLooseEnds();
+    statusBar.setText (n > 0 ? "Welded " + juce::String (n) + " loose connection(s)"
+                             : "Nothing to weld — no loose ends found",
+                       juce::dontSendNotification);
+    canvas.grabKeyboardFocus();
 }
 
 // ---- layout ----------------------------------------------------------------
@@ -184,6 +249,10 @@ void EditorComponent::resized()
         place (*b, 34);
     top.removeFromLeft (12);
     place (frameButton, 90);
+    place (weldButton, 60);
+    top.removeFromLeft (12);
+    carsCaption.setBounds (top.removeFromLeft (44));
+    carsField.setBounds (top.removeFromLeft (46).reduced (1));
 
     statusBar.setBounds (area.removeFromBottom (24));
     canvas.setBounds (area);

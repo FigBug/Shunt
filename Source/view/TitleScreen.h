@@ -10,7 +10,8 @@ class TitleScreen : public juce::Component
 {
 public:
     TitleScreen (gin::GameControllerManager& controllers,
-                 int initialPlayers = 2, float initialVolume = 1.0f);
+                 int initialPlayers = 2, float initialVolume = 1.0f,
+                 int initialMapIndex = 0);
 
     void paint (juce::Graphics& g) override;
     bool keyPressed (const juce::KeyPress& key) override;
@@ -19,6 +20,7 @@ public:
 
     int   getNumPlayers()  const noexcept { return numPlayers; }
     float getVolume()      const noexcept { return volume; }
+    int   getMapIndex()    const noexcept { return mapIndex; }
     bool  isStartPressed() const noexcept { return startPressed; }
 
     bool isControllerConnected (int slot) const noexcept;
@@ -27,10 +29,13 @@ private:
     gin::GameControllerManager& controllers;
     int   numPlayers   = 2;
     float volume       = 1.0f;
+    int   mapIndex     = 0;
     bool  startPressed = false;
 
     bool prevBumperLeft  = false;
     bool prevBumperRight = false;
+    bool prevDpadUp      = false;
+    bool prevDpadDown    = false;
     bool prevStart       = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TitleScreen)

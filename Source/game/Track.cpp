@@ -535,6 +535,11 @@ void TrackGraph::loadFromJson (const juce::String& json, float scale)
             addSpawn ({ x, y }, colour);
         }
     }
+
+    // Total cars for the level; defaults to one per spawn when unspecified.
+    carCount = root.hasProperty ("car_count")
+                 ? (int) root.getProperty ("car_count", 0)
+                 : (int) spawns.size();
 }
 
 // ════════════════════════════════════════════════════════════════

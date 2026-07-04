@@ -36,6 +36,8 @@ private:
     bool                                    inGame     = false;
     bool                                    endScreenReady = false;
     int                                     savedNumPlayers = 2;
+    int                                     savedMapIndex   = 0;
+    std::unique_ptr<juce::PropertiesFile>   settings;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };

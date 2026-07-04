@@ -1,5 +1,6 @@
 #include "TitleScreen.h"
 #include "TrainRenderer.h"
+#include "../game/Maps.h"
 
 #include <cmath>
 
@@ -17,10 +18,11 @@ namespace
 }
 
 TitleScreen::TitleScreen (gin::GameControllerManager& controllers_,
-                          int initialPlayers, float initialVolume)
+                          int initialPlayers, float initialVolume, int initialMapIndex)
     : controllers (controllers_),
       numPlayers (juce::jlimit (2, 4, initialPlayers)),
-      volume (juce::jlimit (0.0f, 1.0f, initialVolume))
+      volume (juce::jlimit (0.0f, 1.0f, initialVolume)),
+      mapIndex (juce::jlimit (0, juce::jmax (0, (int) game::getMaps().size() - 1), initialMapIndex))
 {
     setWantsKeyboardFocus (true);
     juce::Timer::callAfterDelay (100, [this] { grabKeyboardFocus(); });
@@ -28,10 +30,20 @@ TitleScreen::TitleScreen (gin::GameControllerManager& controllers_,
 
 bool TitleScreen::keyPressed (const juce::KeyPress& key)
 {
+    const int numMaps = (int) game::getMaps().size();
+
     if (key == juce::KeyPress::leftKey)
         numPlayers = juce::jmax (numPlayers - 1, 2);
     else if (key == juce::KeyPress::rightKey)
         numPlayers = juce::jmin (numPlayers + 1, 4);
+    else if (key == juce::KeyPress::upKey)
+    {
+        if (numMaps > 0) mapIndex = (mapIndex - 1 + numMaps) % numMaps;
+    }
+    else if (key == juce::KeyPress::downKey)
+    {
+        if (numMaps > 0) mapIndex = (mapIndex + 1) % numMaps;
+    }
     else if (key.getTextCharacter() == '+' || key.getTextCharacter() == '=')
         volume = juce::jmin (1.0f, volume + 0.1f);
     else if (key.getTextCharacter() == '-')
@@ -57,6 +69,8 @@ void TitleScreen::update()
     bool anyStart = false;
     bool anyLeft  = false;
     bool anyRight = false;
+    bool anyUp    = false;
+    bool anyDown  = false;
 
     for (int i = 0; i < 4; ++i)
     {
@@ -70,15 +84,23 @@ void TitleScreen::update()
 
             if (c->isButtonDown (B::leftShoulder))  anyLeft = true;
             if (c->isButtonDown (B::rightShoulder)) anyRight = true;
+            if (c->isButtonDown (B::dpadUp))        anyUp = true;
+            if (c->isButtonDown (B::dpadDown))      anyDown = true;
         }
     }
 
+    const int numMaps = (int) game::getMaps().size();
+
     if (anyRight && ! prevBumperRight) numPlayers = juce::jmin (numPlayers + 1, 4);
     if (anyLeft  && ! prevBumperLeft)  numPlayers = juce::jmax (numPlayers - 1, 2);
+    if (anyDown  && ! prevDpadDown && numMaps > 0) mapIndex = (mapIndex + 1) % numMaps;
+    if (anyUp    && ! prevDpadUp   && numMaps > 0) mapIndex = (mapIndex - 1 + numMaps) % numMaps;
     if (anyStart && ! prevStart)       startPressed = true;
 
     prevBumperRight = anyRight;
     prevBumperLeft  = anyLeft;
+    prevDpadUp      = anyUp;
+    prevDpadDown    = anyDown;
     prevStart       = anyStart;
 }
 
@@ -97,23 +119,35 @@ void TitleScreen::paint (juce::Graphics& g)
     g.setFont (juce::Font (juce::FontOptions().withHeight (24.0f)));
     g.setColour (juce::Colours::white.withAlpha (0.7f));
     g.drawText (juce::String (numPlayers) + " Players",
-                (int) bounds.getX(), (int) (cy * 0.7f),
+                (int) bounds.getX(), (int) (cy * 0.66f),
                 (int) bounds.getWidth(), 30,
+                juce::Justification::centred);
+
+    const auto& maps = game::getMaps();
+    juce::String mapName = (mapIndex >= 0 && mapIndex < (int) maps.size())
+                             ? maps[(size_t) mapIndex].name : juce::String();
+    g.setFont (juce::Font (juce::FontOptions().withHeight (22.0f)));
+    g.setColour (juce::Colour::fromRGB (240, 220, 180));
+    g.drawText (juce::String::fromUTF8 ("Map:  \xe2\x97\x82 ") + mapName
+                + juce::String::fromUTF8 (" \xe2\x96\xb8"),
+                (int) bounds.getX(), (int) (cy * 0.76f),
+                (int) bounds.getWidth(), 28,
                 juce::Justification::centred);
 
     g.setFont (juce::Font (juce::FontOptions().withHeight (18.0f)));
     g.setColour (juce::Colours::white.withAlpha (0.55f));
     int volPct = (int) std::round (volume * 100.0f);
     g.drawText ("Volume: " + juce::String (volPct) + "%",
-                (int) bounds.getX(), (int) (cy * 0.82f),
+                (int) bounds.getX(), (int) (cy * 0.85f),
                 (int) bounds.getWidth(), 24,
                 juce::Justification::centred);
 
     g.setFont (juce::Font (juce::FontOptions().withHeight (13.0f)));
     g.setColour (juce::Colours::white.withAlpha (0.35f));
-    g.drawText (juce::String::fromUTF8 ("LB/RB or \xe2\x86\x90\xe2\x86\x92  Players")
-                + "   +/-  Volume",
-                (int) bounds.getX(), (int) (cy * 0.90f),
+    g.drawText (juce::String::fromUTF8 ("\xe2\x86\x90\xe2\x86\x92 / LB-RB  Players")
+                + juce::String::fromUTF8 ("    \xe2\x86\x91\xe2\x86\x93 / D-pad  Map")
+                + "    +/-  Volume",
+                (int) bounds.getX(), (int) (cy * 0.93f),
                 (int) bounds.getWidth(), 22,
                 juce::Justification::centred);
 

@@ -1,4 +1,5 @@
 #include "EditorCanvas.h"
+#include <limits>
 
 // ============================================================================
 EditorCanvas::EditorCanvas (LevelDocument& d) : doc (d)
@@ -10,6 +11,8 @@ void EditorCanvas::setTool (Tool t)
 {
     tool = t;
     chainNode = -1;
+    hoverSnapNode = -1;
+    hoverSplitValid = false;
     if (tool != Tool::select)
     {
         selKind = SelKind::none;
@@ -113,11 +116,75 @@ int EditorCanvas::hitSpawn (juce::Point<float> world, float screenRadius) const
     return best;
 }
 
+int EditorCanvas::snapNodeAt (juce::Point<float> world, int excludeId) const
+{
+    float r = kSnapPx / zoom;
+    int best = -1;
+    float bestD = r;
+    for (const auto& n : doc.nodes)
+    {
+        if (n.id == excludeId) continue;
+        float d = n.pos.getDistanceFrom (world);
+        if (d < bestD) { bestD = d; best = n.id; }
+    }
+    return best;
+}
+
+bool EditorCanvas::nearestSegment (juce::Point<float> world, int excludeNode,
+                                   int& outSeg, float& outT,
+                                   juce::Point<float>& outPoint, float& outWorldDist) const
+{
+    bool found = false;
+    outWorldDist = std::numeric_limits<float>::max();
+
+    for (const auto& s : doc.segments)
+    {
+        if (excludeNode >= 0 && (s.from == excludeNode || s.to == excludeNode))
+            continue;
+
+        auto poly = doc.polylineFor (s);
+        int m = (int) poly.size();
+        for (int i = 0; i + 1 < m; ++i)
+        {
+            auto a = poly[(size_t) i], b = poly[(size_t) (i + 1)];
+            auto d = b - a;
+            float len2 = d.x * d.x + d.y * d.y;
+            float lt = len2 > 0.0f
+                ? juce::jlimit (0.0f, 1.0f, ((world.x - a.x) * d.x + (world.y - a.y) * d.y) / len2)
+                : 0.0f;
+            auto p = a + d * lt;
+            float dist = p.getDistanceFrom (world);
+            if (dist < outWorldDist)
+            {
+                outWorldDist = dist;
+                outPoint = p;
+                outSeg = s.id;
+                outT = ((float) i + lt) / (float) (m - 1);
+                found = true;
+            }
+        }
+    }
+    return found;
+}
+
+bool EditorCanvas::nearestSegmentPoint (juce::Point<float> world,
+                                        juce::Point<float>& outPoint, float& outWorldDist) const
+{
+    int seg; float t;
+    return nearestSegment (world, -1, seg, t, outPoint, outWorldDist);
+}
+
 int EditorCanvas::findOrCreateNode (juce::Point<float> world)
 {
-    int existing = hitNode (world);
-    if (existing >= 0)
+    if (int existing = hitNode (world); existing >= 0)
         return existing;
+
+    // Landing on the interior of an existing track splits it there, forming a
+    // real junction/switch instead of a disconnected overlapping node.
+    int seg; float t; juce::Point<float> pt; float dist;
+    if (nearestSegment (world, -1, seg, t, pt, dist) && dist * zoom <= kSnapPx)
+        return doc.splitSegment (seg, t);
+
     return doc.addNode (snap (world));
 }
 
@@ -191,7 +258,12 @@ void EditorCanvas::mouseDown (const juce::MouseEvent& e)
 
         case Tool::spawn:
         {
-            doc.spawns.push_back ({ snap (world), -1 });
+            juce::Point<float> onTrack;
+            float dist;
+            auto pos = snap (world);
+            if (nearestSegmentPoint (world, onTrack, dist) && dist * zoom <= kSnapPx)
+                pos = onTrack;                // drop it exactly on the nearest rail
+            doc.spawns.push_back ({ pos, -1 });
             break;
         }
 
@@ -199,7 +271,17 @@ void EditorCanvas::mouseDown (const juce::MouseEvent& e)
         {
             int n = hitNode (world);
             if (n < 0)
-                n = doc.addNode (snap (world));   // allow placing a fresh drop-off node
+            {
+                // Drop-offs must sit on the track (the game spawns engines and
+                // scores deliveries at the drop-off node). Snap onto the nearest
+                // segment, splitting it; only fall back to a free node if there
+                // is no track nearby.
+                int seg; float t; juce::Point<float> pt; float dist;
+                if (nearestSegment (world, -1, seg, t, pt, dist) && dist * zoom <= kSnapPx)
+                    n = doc.splitSegment (seg, t);
+                else
+                    n = doc.addNode (snap (world));
+            }
 
             if (const auto* d = doc.dropOffForNode (n); d != nullptr && d->colour == dropColour)
                 doc.clearDropOff (n);             // click same colour again to remove
@@ -247,14 +329,27 @@ void EditorCanvas::mouseDrag (const juce::MouseEvent& e)
     switch (selKind)
     {
         case SelKind::node:
-            if (auto* n = doc.findNode (selId)) n->pos = world;
+            if (auto* n = doc.findNode (selId))
+            {
+                // Snap onto another node within range — dropping here merges the
+                // two (joining tracks into a switch/junction).
+                hoverSnapNode = snapNodeAt (world, selId);
+                n->pos = (hoverSnapNode >= 0) ? doc.findNode (hoverSnapNode)->pos : world;
+            }
             break;
         case SelKind::control:
             if (auto* s = doc.findSegment (selId)) s->control = screenToWorld (e.position);
             break;
         case SelKind::spawn:
             if (selId >= 0 && selId < (int) doc.spawns.size())
-                doc.spawns[(size_t) selId].pos = world;
+            {
+                juce::Point<float> onTrack;
+                float dist;
+                auto pos = world;
+                if (nearestSegmentPoint (world, onTrack, dist) && dist * zoom <= kSnapPx)
+                    pos = onTrack;            // slide along the nearest rail
+                doc.spawns[(size_t) selId].pos = pos;
+            }
             break;
         case SelKind::none:
         case SelKind::segment:
@@ -266,8 +361,10 @@ void EditorCanvas::mouseDrag (const juce::MouseEvent& e)
 
 float EditorCanvas::rectRadiusFor (juce::Rectangle<float> b) const
 {
-    return juce::jlimit (1.0f, juce::jmin (b.getWidth(), b.getHeight()) * 0.5f,
-                         juce::jmin (b.getWidth(), b.getHeight()) * 0.25f);
+    // 25% of the shorter side is always within [0, half the shorter side], so
+    // no clamping is needed. (A degenerate 0-size rect during the rubber-band
+    // drag just yields radius 0, which draws a plain rectangle preview.)
+    return juce::jmin (b.getWidth(), b.getHeight()) * 0.25f;
 }
 
 void EditorCanvas::mouseUp (const juce::MouseEvent&)
@@ -280,16 +377,52 @@ void EditorCanvas::mouseUp (const juce::MouseEvent&)
             doc.addRoundedRectLoop (b, rectRadiusFor (b));
         repaint();
     }
+    // Resolve a node drag: merge onto another node, or split a segment it was
+    // dropped on — either way forming a real junction/switch.
+    if (dragging && selKind == SelKind::node)
+    {
+        if (hoverSnapNode >= 0)
+        {
+            doc.mergeNode (selId, hoverSnapNode);
+            selId = hoverSnapNode;
+        }
+        else if (auto* n = doc.findNode (selId))
+        {
+            int seg; float t; juce::Point<float> pt; float dist;
+            if (nearestSegment (n->pos, selId, seg, t, pt, dist) && dist * zoom <= kSnapPx)
+                doc.splitSegment (seg, t, selId);   // dragged node becomes the junction
+        }
+    }
+
+    hoverSnapNode = -1;
+    hoverSplitValid = false;
     panning = false;
     dragging = false;
+    repaint();
 }
 
 void EditorCanvas::mouseMove (const juce::MouseEvent& e)
 {
     lastMouseWorld = screenToWorld (e.position);
+
+    // For the connect-y tools, preview whether a click will join an existing
+    // node (green ring) or split a track to form a junction (orange marker).
+    bool connectTool = (tool == Tool::straight || tool == Tool::curve || tool == Tool::dropOff);
+    hoverSnapNode = connectTool ? snapNodeAt (lastMouseWorld, -1) : -1;
+
+    hoverSplitValid = false;
+    if (connectTool && hoverSnapNode < 0)
+    {
+        int seg; float t; juce::Point<float> pt; float dist;
+        if (nearestSegment (lastMouseWorld, -1, seg, t, pt, dist) && dist * zoom <= kSnapPx)
+        {
+            hoverSplitValid = true;
+            hoverSplitPoint = pt;
+        }
+    }
+
     updateStatus (lastMouseWorld);
-    if (chainNode >= 0)
-        repaint();
+    repaint();
 }
 
 void EditorCanvas::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w)
@@ -377,7 +510,7 @@ void EditorCanvas::updateStatus (juce::Point<float> world)
 
 void EditorCanvas::frameAll()
 {
-    if (doc.nodes.empty())
+    if (doc.nodes.empty() && doc.spawns.empty())
     {
         zoom = 1.0f;
         pan = { 40.0f, 40.0f };
@@ -385,12 +518,22 @@ void EditorCanvas::frameAll()
         return;
     }
 
-    juce::Rectangle<float> bounds (doc.nodes.front().pos, doc.nodes.front().pos);
-    for (const auto& n : doc.nodes)
-        bounds = bounds.getUnion ({ n.pos.x, n.pos.y, 0.0f, 0.0f });
-    for (const auto& sp : doc.spawns)
-        bounds = bounds.getUnion ({ sp.pos.x, sp.pos.y, 0.0f, 0.0f });
+    // Accumulate the bounding box by hand — Rectangle::getUnion treats a
+    // zero-size rect as empty and drops it, so unioning point-rects collapses.
+    auto first = doc.nodes.empty() ? doc.spawns.front().pos : doc.nodes.front().pos;
+    float minX = first.x, minY = first.y, maxX = first.x, maxY = first.y;
+    auto include = [&] (juce::Point<float> p)
+    {
+        minX = juce::jmin (minX, p.x);  minY = juce::jmin (minY, p.y);
+        maxX = juce::jmax (maxX, p.x);  maxY = juce::jmax (maxY, p.y);
+    };
+    for (const auto& n : doc.nodes)   include (n.pos);
+    for (const auto& sp : doc.spawns) include (sp.pos);
 
+    juce::Rectangle<float> bounds (minX, minY, maxX - minX, maxY - minY);
+
+    // Pad, guaranteeing a non-zero extent even for a single point or an
+    // axis-aligned line (expanded adds the delta to every side).
     bounds = bounds.expanded (juce::jmax (bounds.getWidth(), bounds.getHeight()) * 0.08f + 20.0f);
 
     auto area = getLocalBounds().toFloat().reduced (10.0f);
@@ -402,6 +545,15 @@ void EditorCanvas::frameAll()
                                      area.getHeight() / bounds.getHeight()));
     pan = area.getCentre() - bounds.getCentre() * zoom;
     repaint();
+}
+
+int EditorCanvas::weldLooseEnds()
+{
+    // ~12 screen px at the current zoom: catches ends drawn "touching" without
+    // fusing genuinely separate tracks.
+    int n = doc.weldLooseEnds (12.0f / juce::jmax (0.01f, zoom));
+    repaint();
+    return n;
 }
 
 void EditorCanvas::resized() {}
@@ -516,15 +668,54 @@ void EditorCanvas::paint (juce::Graphics& g)
         g.drawEllipse (juce::Rectangle<float> (r * 2, r * 2).withCentre (c), 1.0f);
     }
 
-    // ---- spawns ----
+    // ---- snap target highlight (green ring on the node a click/drag joins) ----
+    if (hoverSnapNode >= 0)
+    {
+        if (const auto* n = doc.findNode (hoverSnapNode))
+        {
+            auto c = worldToScreen (n->pos);
+            g.setColour (juce::Colour::fromRGB (60, 220, 90));
+            g.drawEllipse (juce::Rectangle<float> (22.0f, 22.0f).withCentre (c), 2.5f);
+        }
+    }
+
+    // ---- split preview (orange marker where a click would break a track to
+    //      form a junction/switch) ----
+    if (hoverSplitValid)
+    {
+        auto c = worldToScreen (hoverSplitPoint);
+        g.setColour (juce::Colour::fromRGB (255, 170, 40));
+        g.drawEllipse (juce::Rectangle<float> (16.0f, 16.0f).withCentre (c), 2.5f);
+        g.drawLine (c.x - 6, c.y, c.x + 6, c.y, 2.0f);
+        g.drawLine (c.x, c.y - 6, c.x, c.y + 6, 2.0f);
+    }
+
+    // ---- spawns (green = on a track, red = floating off-track) ----
     for (int i = 0; i < (int) doc.spawns.size(); ++i)
     {
-        auto c = worldToScreen (doc.spawns[(size_t) i].pos);
+        auto spawnPos = doc.spawns[(size_t) i].pos;
+        auto c = worldToScreen (spawnPos);
         bool selected = (selKind == SelKind::spawn && selId == i);
+
+        juce::Point<float> onTrack;
+        float dist = 0.0f;
+        bool has = nearestSegmentPoint (spawnPos, onTrack, dist);
+        bool onRail = has && dist * zoom <= 4.0f;   // essentially on the centreline
+
+        // Show where an off-track spawn would snap to in-game.
+        if (has && ! onRail)
+        {
+            g.setColour (juce::Colour::fromRGB (230, 90, 90).withAlpha (0.7f));
+            g.drawLine ({ c, worldToScreen (onTrack) }, 1.0f);
+        }
+
         juce::Path diamond;
         float r = 8.0f;
         diamond.addQuadrilateral (c.x, c.y - r, c.x + r, c.y, c.x, c.y + r, c.x - r, c.y);
-        g.setColour (selected ? juce::Colours::yellow : juce::Colour::fromRGB (90, 170, 255));
+        juce::Colour fill = selected ? juce::Colours::yellow
+                          : onRail    ? juce::Colour::fromRGB (70, 200, 110)
+                                      : juce::Colour::fromRGB (230, 90, 90);
+        g.setColour (fill);
         g.fillPath (diamond);
         g.setColour (juce::Colours::white.withAlpha (0.8f));
         g.strokePath (diamond, juce::PathStrokeType (1.0f));
@@ -535,8 +726,12 @@ void EditorCanvas::paint (juce::Graphics& g)
     {
         if (const auto* n = doc.findNode (chainNode))
         {
+            // Preview endpoint snaps to a nearby node when one is in range.
+            auto endWorld = (hoverSnapNode >= 0 && doc.findNode (hoverSnapNode) != nullptr)
+                                ? doc.findNode (hoverSnapNode)->pos
+                                : snap (lastMouseWorld);
             auto a = worldToScreen (n->pos);
-            auto b = worldToScreen (snap (lastMouseWorld));
+            auto b = worldToScreen (endWorld);
             g.setColour (juce::Colours::yellow.withAlpha (0.7f));
             g.drawLine ({ a, b }, tool == Tool::curve ? 2.5f : 1.5f);
             g.fillEllipse (juce::Rectangle<float> (6, 6).withCentre (a));

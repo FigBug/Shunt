@@ -1,5 +1,6 @@
 #include "GameState.h"
 #include "BinaryData.h"
+#include "Maps.h"
 #include <gin_controllers/gin_controllers.h>
 #include <algorithm>
 #include <cmath>
@@ -25,10 +26,14 @@ namespace
     }
 }
 
-GameState::GameState (int numPlayers)
+GameState::GameState (int numPlayers, int mapIndex)
 {
-    auto jsonStr = juce::String::fromUTF8 (BinaryData::railgraph_json,
-                                            BinaryData::railgraph_jsonSize);
+    const auto& maps = getMaps();
+    juce::String jsonStr;
+    if (mapIndex >= 0 && mapIndex < (int) maps.size())
+        jsonStr = juce::String::fromUTF8 (maps[(size_t) mapIndex].json,
+                                          maps[(size_t) mapIndex].size);
+
     if (jsonStr.isNotEmpty())
         track.loadFromJson (jsonStr, 0.04f);
     else
@@ -119,30 +124,38 @@ void GameState::spawnAi (int slot)
 void GameState::placeCarsFromSpawns()
 {
     const auto& spawns = track.getSpawns();
-    int n = (int) spawns.size();
+    int numSpawns = (int) spawns.size();
+    if (numSpawns == 0) return;
 
-    // Balanced, shuffled colour pool for spawns that don't pin a colour, so an
-    // all-default level still gets an even spread of the four car colours.
+    int total = juce::jmax (0, track.getCarCount());
+    if (total == 0) return;
+
+    // Balanced, shuffled colour pool so the level gets an even spread of the
+    // four car colours regardless of how the total divides up.
     std::vector<CarColour> pool;
-    for (int i = 0; i < n; ++i)
+    for (int i = 0; i < total; ++i)
         pool.push_back ((CarColour) (i % (int) CarColour::count));
-    for (int i = n - 1; i > 0; --i)
+    for (int i = total - 1; i > 0; --i)
         std::swap (pool[(size_t) i], pool[(size_t) rng().nextInt (i + 1)]);
 
-    int poolIdx = 0;
-    for (const auto& sp : spawns)
+    // Randomly assign each car to a spawn. Multiple cars on one spawn are lined
+    // up along the rail so they don't overlap.
+    std::vector<int> perSpawn ((size_t) numSpawns, 0);
+
+    for (int i = 0; i < total; ++i)
     {
-        auto tp = track.nearestTrackPos (sp.pos);
+        int si = rng().nextInt (numSpawns);
+        auto base = track.nearestTrackPos (spawns[(size_t) si].pos);
+        auto placed = track.advance (base, 1, (float) perSpawn[(size_t) si] * kCarSpacing);
+        perSpawn[(size_t) si]++;
 
         Car car;
         car.id     = nextCarId++;
-        car.colour = (sp.colour >= 0 && sp.colour < (int) CarColour::count)
-                        ? (CarColour) sp.colour
-                        : pool[(size_t) (poolIdx++ % juce::jmax (1, n))];
-        car.pos    = tp;
+        car.colour = pool[(size_t) i];
+        car.pos    = placed.pos;
         car.dir    = 1;
         car.free   = true;
-        car.bodyId = physics.addBody (tp.segment, tp.distance, 1, kCarMass, kCarFriction);
+        car.bodyId = physics.addBody (placed.pos.segment, placed.pos.distance, 1, kCarMass, kCarFriction);
         cars.push_back (car);
     }
 }

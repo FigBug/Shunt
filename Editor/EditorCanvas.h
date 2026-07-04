@@ -21,6 +21,7 @@ public:
     int  getDropColour() const noexcept { return dropColour; }
 
     void frameAll();                    // fit the whole level in view
+    int  weldLooseEnds();               // connect loose track ends / drop-offs; returns count
     std::function<void()> onStatusChanged;   // fired when tool/hover changes
     std::function<void()> onToolChanged;     // fired when the active tool changes
     juce::String statusText;
@@ -56,11 +57,17 @@ private:
     juce::Point<float> rectStart, rectEnd;
     juce::Point<float> panStart, panOrigin;
     juce::Point<float> lastMouseWorld;
+    int      hoverSnapNode = -1;        // node a track-tool click / node-drag will snap to
+    bool     hoverSplitValid = false;   // hovering a segment interior (would split it)
+    juce::Point<float> hoverSplitPoint;
 
     float rectRadiusFor (juce::Rectangle<float>) const;
 
     bool snapGrid = false;
     float gridSize = 30.0f;
+
+    // Snap distance for joining track ends / spawns to tracks (screen pixels).
+    static constexpr float kSnapPx = 10.0f;
 
     // helpers
     juce::AffineTransform toScreen() const;
@@ -68,10 +75,21 @@ private:
     juce::Point<float> screenToWorld (juce::Point<float>) const;
     juce::Point<float> snap (juce::Point<float> world) const;
 
-    int hitNode (juce::Point<float> world, float screenRadius = 9.0f) const;
+    int hitNode (juce::Point<float> world, float screenRadius = 10.0f) const;
     int hitSegment (juce::Point<float> world, float screenRadius = 7.0f) const;
     int hitControl (juce::Point<float> world, float screenRadius = 8.0f) const;
     int hitSpawn (juce::Point<float> world, float screenRadius = 10.0f) const;
+
+    // Nearest existing node within kSnapPx (screen), excluding one id (-1 = none).
+    int snapNodeAt (juce::Point<float> world, int excludeId) const;
+    // Closest point on any track segment; returns false if there are no segments.
+    bool nearestSegmentPoint (juce::Point<float> world,
+                              juce::Point<float>& outPoint, float& outWorldDist) const;
+    // Richer variant: also yields the segment id and parameter t along it,
+    // optionally ignoring segments incident to `excludeNode`.
+    bool nearestSegment (juce::Point<float> world, int excludeNode,
+                         int& outSeg, float& outT,
+                         juce::Point<float>& outPoint, float& outWorldDist) const;
 
     int findOrCreateNode (juce::Point<float> world);
     void updateStatus (juce::Point<float> world);

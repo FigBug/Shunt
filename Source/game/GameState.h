@@ -13,7 +13,7 @@ namespace game
 class GameState
 {
 public:
-    explicit GameState (int numPlayers);
+    explicit GameState (int numPlayers, int mapIndex = 0);
 
     void update (float dt, gin::GameControllerManager& controllers);
 

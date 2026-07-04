@@ -95,7 +95,12 @@
       "Bash(screencapture -o -x /tmp/shunt_game.png)",
       "Bash(osascript *)",
       "Bash(screencapture -o -x -R640,163,1280,752 /tmp/shunt_yard.png)",
-      "Bash(pkill -f \"MacOS/Shunt\")"
+      "Bash(pkill -f \"MacOS/Shunt\")",
+      "Bash(cmake --build Builds/xcode --target Shunt --config Debug)",
+      "Bash(screencapture -o -x -R640,163,1280,600 /tmp/title1.png)",
+      "Bash(screencapture -o -x -R640,123,1280,832 /tmp/ed_frame.png)",
+      "Bash(screencapture -o -x -R580,123,1400,90 /tmp/toolbar.png)",
+      "Bash(screencapture -o -x -R0,60,1280,752 /tmp/cars40.png)"
     ]
   }
 }
