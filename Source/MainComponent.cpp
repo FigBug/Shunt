@@ -155,9 +155,10 @@ void MainComponent::timerCallback()
     {
         const auto& players = state->getPlayers();
         const auto& track   = state->getTrack();
+        const bool  over    = state->isGameOver();   // silence engines/horns on the end screen
         for (int i = 0; i < audio::SoundEngine::kMaxEngines; ++i)
         {
-            if (i < (int) players.size())
+            if (! over && i < (int) players.size())
             {
                 const auto& pl = players[(size_t) i];
                 float speed01 = juce::jmin (1.0f, std::abs (pl.speed) / game::kEngineTopSpeed);

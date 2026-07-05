@@ -1104,10 +1104,17 @@ float GameState::aiUpdate (Player& p, float dt)
             return 0.0f;
 
         // If another engine is sitting on the way to (or in) the drop-off,
-        // there's no alternative destination — hold position and wait for it
-        // to clear rather than shoving in.
+        // there's no alternative destination — hold position and wait for it to
+        // clear rather than shoving in. But don't defer forever: an idle engine
+        // (e.g. when we hold the last car) will never move, so time the wait out
+        // and proceed, letting the physics nudge it aside.
         if (rethink)
-            brain.waiting = engineBlocksTarget (p, brain.targetPos);
+        {
+            constexpr int kMaxWaitRethinks = 10;   // ~2s at 0.2s per rethink
+            bool blocked = engineBlocksTarget (p, brain.targetPos);
+            brain.waitCount = blocked ? brain.waitCount + 1 : 0;
+            brain.waiting = blocked && brain.waitCount < kMaxWaitRethinks;
+        }
 
         // Wrong-side detection: if we're parked right at the drop-off with cars
         // still aboard and nothing is scoring, the car is on the undeliverable

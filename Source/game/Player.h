@@ -37,6 +37,8 @@ struct AiBrain
     int pathDir = 1;
     int lastSeg = -1;
     bool waiting = false;   // holding position (e.g. the drop-off is blocked)
+    int  waitCount = 0;     // rethinks spent waiting; times out so we never
+                            // defer forever to an idle engine that won't clear
     int dirSign = 0;        // last commanded travel direction (+1/-1)
     float dirTimer = 0.0f;  // lockout before the direction may flip again
     int homeStuck = 0;      // rethinks parked at the drop-off without scoring
