@@ -489,6 +489,14 @@ void GameState::update (float dt, gin::GameControllerManager& controllers)
 
     for (auto& p : players)
     {
+        // Expire the delivery streak when no car has been dropped off recently.
+        if (p.deliveryTimer > 0.0f)
+        {
+            p.deliveryTimer -= dt;
+            if (p.deliveryTimer <= 0.0f)
+                p.deliveryStreak = 0;
+        }
+
         checkCoupling (p);
         checkScoring (p);
     }

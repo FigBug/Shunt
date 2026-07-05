@@ -136,6 +136,12 @@ void MainComponent::timerCallback()
         titleScreen->update();
         titleScreen->repaint();
 
+        if (titleScreen->isExitPressed())
+        {
+            juce::JUCEApplication::getInstance()->systemRequestedQuit();
+            return;
+        }
+
         if (titleScreen->isStartPressed() || std::getenv ("SHUNT_AUTOSTART") != nullptr)
             startGame();
 

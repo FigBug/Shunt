@@ -32,7 +32,9 @@ bool TitleScreen::keyPressed (const juce::KeyPress& key)
 {
     const int numMaps = (int) game::getMaps().size();
 
-    if (key == juce::KeyPress::leftKey)
+    if (key == juce::KeyPress::escapeKey)
+        exitPressed = true;                    // Esc on the menu quits the game
+    else if (key == juce::KeyPress::leftKey)
         numPlayers = juce::jmax (numPlayers - 1, 2);
     else if (key == juce::KeyPress::rightKey)
         numPlayers = juce::jmin (numPlayers + 1, 4);

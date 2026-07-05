@@ -22,6 +22,7 @@ public:
     float getVolume()      const noexcept { return volume; }
     int   getMapIndex()    const noexcept { return mapIndex; }
     bool  isStartPressed() const noexcept { return startPressed; }
+    bool  isExitPressed()  const noexcept { return exitPressed; }
 
     bool isControllerConnected (int slot) const noexcept;
 
@@ -31,6 +32,7 @@ private:
     float volume       = 1.0f;
     int   mapIndex     = 0;
     bool  startPressed = false;
+    bool  exitPressed  = false;
 
     bool prevBumperLeft  = false;
     bool prevBumperRight = false;

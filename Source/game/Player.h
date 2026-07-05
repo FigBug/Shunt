@@ -58,6 +58,8 @@ struct Player
     std::vector<int> frontCars;
     std::vector<int> rearCars;
     int score = 0;
+    int deliveryStreak = 0;      // cars delivered back-to-back — a scoring multiplier
+    float deliveryTimer = 0.0f;  // time left before the streak resets
     CarColour carryColour = CarColour::red;
     bool hasColourLock = false;
 
