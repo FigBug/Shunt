@@ -68,7 +68,7 @@ struct Player
     bool prevToggleFwd  = false;
     bool prevToggleBack = false;
     bool prevUncouple   = false;
-    bool prevHorn       = false;
+    bool hornHeld       = false;   // horn button currently held (sustained sound)
     bool recoupleLock       = false;
     float recoupleLockDist  = 0.0f;
 

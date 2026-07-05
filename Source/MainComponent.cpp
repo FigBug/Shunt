@@ -163,10 +163,12 @@ void MainComponent::timerCallback()
                 float speed01 = juce::jmin (1.0f, std::abs (pl.speed) / game::kEngineTopSpeed);
                 float pan     = state->panForWorldX (track.worldPos (pl.pos).x);
                 soundEngine.setEngine (i, true, speed01, pan);
+                soundEngine.setHorn (i, pl.hornHeld, pan);
             }
             else
             {
                 soundEngine.setEngine (i, false, 0.0f);
+                soundEngine.setHorn (i, false);
             }
         }
 

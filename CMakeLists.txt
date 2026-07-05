@@ -47,7 +47,7 @@ add_subdirectory (modules/juce)
 set_property (DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/modules/juce" APPEND PROPERTY LABELS JUCE)
 
 # Gin modules
-foreach (module_name IN ITEMS gin gin_controllers gin_graphics gin_gui)
+foreach (module_name IN ITEMS gin gin_controllers gin_dsp gin_simd gin_graphics gin_gui)
 	juce_add_module ("${CMAKE_CURRENT_LIST_DIR}/modules/gin/modules/${module_name}")
 	set_property (TARGET "${module_name}" APPEND PROPERTY LABELS Gin)
 endforeach()
@@ -91,6 +91,8 @@ target_link_libraries (${GAME_NAME} PRIVATE
 
 	gin
 	gin_controllers
+	gin_dsp
+	gin_simd
 	gin_graphics
 	gin_gui
 
@@ -100,6 +102,7 @@ target_link_libraries (${GAME_NAME} PRIVATE
 	juce::juce_audio_utils
 	juce::juce_core
 	juce::juce_data_structures
+	juce::juce_dsp
 	juce::juce_events
 	juce::juce_graphics
 	juce::juce_gui_basics

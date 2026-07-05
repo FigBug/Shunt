@@ -360,6 +360,7 @@ void GameState::update (float dt, gin::GameControllerManager& controllers)
     {
         float speed = 0.0f;
         bool toggleFwdEdge = false, toggleBackEdge = false, uncoupleEdge = false;
+        p.hornHeld = false;   // cleared unless a held horn button says otherwise
 
         if (p.ai.has_value())
         {
@@ -378,9 +379,9 @@ void GameState::update (float dt, gin::GameControllerManager& controllers)
 
                 speed = throttle * kTrainSpeed;
 
-                bool toggleFwd  = c->isButtonDown (B::faceRight);   // B = switch ahead
+                bool toggleFwd  = c->isButtonDown (B::faceUp);      // Y = switch ahead
                 bool toggleBack = c->isButtonDown (B::faceDown);    // A = switch behind
-                bool uncouple   = c->isButtonDown (B::faceUp);      // Y = decouple
+                bool uncouple   = c->isButtonDown (B::faceRight);   // B = uncouple
                 bool horn       = c->isButtonDown (B::faceLeft);    // X = horn
 
                 toggleFwdEdge  = toggleFwd  && ! p.prevToggleFwd;
@@ -390,9 +391,7 @@ void GameState::update (float dt, gin::GameControllerManager& controllers)
                 p.prevToggleBack = toggleBack;
                 p.prevUncouple   = uncouple;
 
-                if (horn && ! p.prevHorn)
-                    soundEvents.push_back ({ SoundEvent::horn, track.worldPos (p.pos) });
-                p.prevHorn = horn;
+                p.hornHeld = horn;   // sustained: sound layer loops while held
             }
         }
 
@@ -649,7 +648,13 @@ void GameState::checkScoring (Player& p)
                             [carId] (const Car& c) { return c.id == carId; }),
                         cars.end());
                     list.erase (list.begin() + i);
-                    p.score++;
+
+                    // Cars delivered back-to-back (a whole consist arriving
+                    // together) build a streak, so the Nth car in a run is worth
+                    // N points — bigger shipments score progressively more.
+                    p.deliveryStreak++;
+                    p.deliveryTimer = kDeliveryStreakWindow;
+                    p.score += p.deliveryStreak;
                     soundEvents.push_back ({ SoundEvent::score, dzPos });
                     return true;
                 }

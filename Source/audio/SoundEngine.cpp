@@ -1,5 +1,6 @@
 #include "SoundEngine.h"
 #include "BinaryData.h"
+#include <gin_dsp/gin_dsp.h>
 
 namespace audio
 {
@@ -8,24 +9,45 @@ SoundEngine::SoundEngine()
 {
     formatManager.registerBasicFormats();
 
-    // The source recording is a long single honk; take just the opening and
-    // fade the tail so a button tap plays a punchy horn blast.
-    loadSound (SoundID::horn, BinaryData::train_horn_ogg, BinaryData::train_horn_oggSize,
-               3.0f /*maxSeconds*/, 0.4f /*fadeOut*/);
-
-    // Short bites of the source recordings; see Assets/sfx/CREDITS.md. Tweak the
-    // (maxSeconds, fadeOut, startSeconds) windows here to reshape any cue.
-    loadSound (SoundID::couple,    BinaryData::couple_ogg,    BinaryData::couple_oggSize,    0.9f, 0.3f);
-    loadSound (SoundID::uncouple,  BinaryData::uncouple_ogg,  BinaryData::uncouple_oggSize,  1.1f, 0.4f, 2.0f);
-    loadSound (SoundID::collision, BinaryData::collision_ogg, BinaryData::collision_oggSize, 1.6f, 0.6f);
-    loadSound (SoundID::score,     BinaryData::score_ogg,     BinaryData::score_oggSize,     1.6f, 0.3f);
-
     auto err = deviceManager.initialiseWithDefaultDevices (0, 2);
     if (err.isNotEmpty())
         DBG ("Audio init error: " + err);
 
+    if (auto* dev = deviceManager.getCurrentAudioDevice())
+        deviceSampleRate = dev->getCurrentSampleRate();
+
+    // Each cue plays the whole sound file from Assets/sfx/ (any format),
+    // resampled to the output rate so it plays at the right pitch.
+    loadSound (SoundID::horn,      "train_horn");
+    loadSound (SoundID::couple,    "couple");
+    loadSound (SoundID::uncouple,  "uncouple");
+    loadSound (SoundID::collision, "collision");
+    loadSound (SoundID::score,     "score");
+
+    // Precompute the horn's sustain loop: the centre 50% of the file, with a
+    // ~30ms crossfade (capped to half the loop) to hide the wrap-around click.
+    {
+        const auto& hb = buffers[(size_t) SoundID::horn];
+        int len = hb.getNumSamples();
+        mixer.hornBuf = &hb;
+        mixer.hornLen = len;
+        mixer.hornA   = len / 4;
+        mixer.hornB   = (len * 3) / 4;
+        int loopLen   = mixer.hornB - mixer.hornA;
+        mixer.hornXf  = juce::jlimit (1, juce::jmax (1, loopLen / 2),
+                                      (int) (deviceSampleRate * 0.03));
+    }
+
     player.setSource (&mixer);
     deviceManager.addAudioCallback (&player);
+}
+
+void SoundEngine::setHorn (int index, bool held, float pan)
+{
+    if (index < 0 || index >= kMaxEngines)
+        return;
+    mixer.horns[(size_t) index].held.store (held);
+    mixer.horns[(size_t) index].pan.store (pan);
 }
 
 SoundEngine::~SoundEngine()
@@ -34,33 +56,36 @@ SoundEngine::~SoundEngine()
     player.setSource (nullptr);
 }
 
-void SoundEngine::loadSound (SoundID id, const void* data, int size,
-                             float maxSeconds, float fadeOutSeconds, float startSeconds)
+void SoundEngine::loadSound (SoundID id, const juce::String& baseName)
 {
+    // Find the baked resource whose original filename is "<baseName>.<ext>".
+    const char* data = nullptr;
+    int size = 0;
+    for (int i = 0; i < BinaryData::namedResourceListSize; ++i)
+    {
+        juce::String orig (BinaryData::originalFilenames[i]);
+        if (orig.upToLastOccurrenceOf (".", false, false) == baseName)
+        {
+            data = BinaryData::getNamedResource (BinaryData::namedResourceList[i], size);
+            break;
+        }
+    }
+    if (data == nullptr)
+        return;
+
     auto stream = std::make_unique<juce::MemoryInputStream> (data, (size_t) size, false);
     std::unique_ptr<juce::AudioFormatReader> reader (formatManager.createReaderFor (std::move (stream)));
-
     if (reader == nullptr)
         return;
 
-    auto sr = reader->sampleRate > 0 ? reader->sampleRate : 44100.0;
-    int total = (int) reader->lengthInSamples;
-    int start = juce::jlimit (0, total, (int) (startSeconds * sr));
-    int avail = total - start;
-    int wanted = maxSeconds > 0.0f ? juce::jmin (avail, (int) (maxSeconds * sr)) : avail;
+    int len = (int) reader->lengthInSamples;
+    juce::AudioBuffer<float> raw ((int) reader->numChannels, len);
+    reader->read (&raw, 0, len, 0, true, true);
 
-    auto& buf = buffers[(size_t) id];
-    buf.setSize ((int) reader->numChannels, wanted);
-    reader->read (&buf, 0, wanted, start, true, true);
-
-    // Small fade-in kills the initial click; fade-out smooths the trimmed tail.
-    int fadeIn = juce::jmin (wanted, (int) (0.005 * sr));
-    if (fadeIn > 1)
-        buf.applyGainRamp (0, fadeIn, 0.0f, 1.0f);
-
-    int fadeOut = juce::jlimit (0, wanted, (int) (fadeOutSeconds * sr));
-    if (fadeOut > 1)
-        buf.applyGainRamp (wanted - fadeOut, fadeOut, 1.0f, 0.0f);
+    double fileRate = reader->sampleRate > 0 ? reader->sampleRate : deviceSampleRate;
+    buffers[(size_t) id] = (std::abs (fileRate - deviceSampleRate) > 1.0)
+        ? gin::resampleBuffer (raw, fileRate, deviceSampleRate)
+        : std::move (raw);
 }
 
 void SoundEngine::play (SoundID id, float gain, float pan)
@@ -159,6 +184,63 @@ void SoundEngine::Mixer::getNextAudioBlock (const juce::AudioSourceChannelInfo& 
 
     float* outL = outCh > 0 ? info.buffer->getWritePointer (0, info.startSample) : nullptr;
     float* outR = outCh > 1 ? info.buffer->getWritePointer (1, info.startSample) : nullptr;
+
+    // ---- held horn voices: attack, crossfaded sustain loop, then release ----
+    if (hornBuf != nullptr && hornLen > 4)
+    {
+        const float halfPi = juce::MathConstants<float>::halfPi;
+        const int   srcCh  = hornBuf->getNumChannels();
+        const float* d0    = hornBuf->getReadPointer (0);
+        const float* d1    = hornBuf->getReadPointer (srcCh > 1 ? 1 : 0);
+        constexpr float hornGain = 0.85f;
+
+        for (auto& h : horns)
+        {
+            bool held = h.held.load();
+            if (held && ! h.active) { h.active = true; h.pos = 0; h.looping = true; }
+            else if (held)          { h.looping = true;  }   // keep looping while held
+            else                    { h.looping = false; }   // released: play out to end
+            if (! h.active)
+                continue;
+
+            float pan = h.pan.load();
+            float lg  = hornGain * vol * juce::jmin (1.0f, 1.0f - pan);
+            float rg  = hornGain * vol * juce::jmin (1.0f, 1.0f + pan);
+
+            for (int s = 0; s < n && h.active; ++s)
+            {
+                if (h.looping && h.pos >= hornB)   // safety (e.g. re-press in the tail)
+                    h.pos = hornA;
+
+                float g1 = 1.0f, g2 = 0.0f;
+                int   idx2 = h.pos;
+                bool  inXf = h.looping && h.pos >= hornB - hornXf && h.pos < hornB;
+                if (inXf)
+                {
+                    float t = (float) (h.pos - (hornB - hornXf)) / (float) hornXf;
+                    g1 = std::cos (t * halfPi);   // equal-power crossfade
+                    g2 = std::sin (t * halfPi);
+                    idx2 = hornA + (h.pos - (hornB - hornXf));
+                }
+
+                float sL = d0[h.pos] * g1 + (inXf ? d0[idx2] * g2 : 0.0f);
+                float sR = d1[h.pos] * g1 + (inXf ? d1[idx2] * g2 : 0.0f);
+
+                if (outL) outL[s] += sL * lg;
+                if (outR) outR[s] += sR * rg;
+
+                ++h.pos;
+                if (h.looping)
+                {
+                    if (h.pos >= hornB) h.pos = hornA + hornXf;   // wrap after crossfade
+                }
+                else if (h.pos >= hornLen)
+                {
+                    h.active = false;   // release finished
+                }
+            }
+        }
+    }
 
     for (auto& e : engines)
     {

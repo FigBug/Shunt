@@ -43,6 +43,10 @@ public:
     void setEngine (int index, bool active, float speed01, float pan = 0.0f);
     void stopAllEngines();
 
+    // Held-horn: starts on the first held==true, loops the centre 50% of the
+    // horn file (crossfaded) while held, then plays out to the end on release.
+    void setHorn (int index, bool held, float pan = 0.0f);
+
     void  setVolume (float v) noexcept { masterVolume = juce::jlimit (0.0f, 1.0f, v); }
     float getVolume() const noexcept   { return masterVolume; }
 
@@ -52,6 +56,7 @@ private:
     juce::AudioSourcePlayer  player;
 
     std::array<juce::AudioBuffer<float>, (size_t) SoundID::count> buffers;
+    double deviceSampleRate = 44100.0;   // output rate; loaded sounds resample to it
     float masterVolume = 0.8f;
 
     // ---- sample playback (Provins pattern) ----
@@ -96,14 +101,28 @@ private:
         std::atomic<float> volume { 1.0f };
 
         std::array<EngineVoice, kMaxEngines> engines {};
+
+        // ---- held horn voice: attack → crossfaded sustain loop → release ----
+        struct HornVoice
+        {
+            std::atomic<bool>  held { false };
+            std::atomic<float> pan  { 0.0f };
+            // audio-thread-only state
+            bool active  = false;
+            bool looping = false;
+            int  pos     = 0;
+        };
+        std::array<HornVoice, kMaxEngines> horns {};
+
+        const juce::AudioBuffer<float>* hornBuf = nullptr;
+        int hornLen = 0, hornA = 0, hornB = 0, hornXf = 0;   // loop bounds + crossfade
     };
 
     Mixer mixer;
 
-    // Read a slice of a sample [startSeconds, startSeconds + maxSeconds) with
-    // short fades to avoid clicks.
-    void loadSound (SoundID id, const void* data, int size,
-                    float maxSeconds, float fadeOutSeconds, float startSeconds = 0.0f);
+    // Load the whole baked sound file matching `baseName` (any extension) into
+    // the buffer for `id`, ready to play as-is.
+    void loadSound (SoundID id, const juce::String& baseName);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SoundEngine)
 };
