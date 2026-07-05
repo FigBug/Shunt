@@ -61,6 +61,8 @@ private:
         float gap = 1e9f;      // scan origin to nearest obstacle surface; negative = overlap
         int bodyIndex = -1;    // index into bodies, -1 = none
         bool buffer = false;
+        bool foul = false;     // body fouling a shared node from another leg of a
+                               // switch/crossing — block, but not colinear
         int walkDir = 0;       // coordinate walk direction at the hit
         int markerVelDir = 0;  // hit edge's velDir
     };

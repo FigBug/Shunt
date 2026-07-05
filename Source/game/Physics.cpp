@@ -118,6 +118,42 @@ PhysicsEngine::ScanHit PhysicsEngine::scanAhead (const TrackGraph& track, size_t
             break;
         }
 
+        // Foul check: a body sitting near this node on any *other* leg (not the
+        // one we came from, not the routed one) shares the physical junction, so
+        // it blocks the node. This is what stops vehicles sliding through each
+        // other at switches and diamond crossings.
+        for (size_t k = 0; k < bodies.size(); ++k)
+        {
+            if (k == selfIndex || ! bodies[k].active) continue;
+
+            for (const Edge* m : { &edges[k].front, &edges[k].back })
+            {
+                if (m->segment == seg || m->segment == next) continue;
+
+                const auto& ms = track.getSegment (m->segment);
+                float distFromNode;
+                if (ms.nodeA == exitNode)      distFromNode = m->distance;
+                else if (ms.nodeB == exitNode) distFromNode = ms.length - m->distance;
+                else continue;   // not incident to this node
+
+                if (distFromNode < -kContactEps) continue;
+
+                // 1D distance through the node to the sibling's surface. Kept in
+                // step with the movement range so we only foul at real contact —
+                // a wider range would falsely stall cars near (but clear of) the
+                // junction, since 1D-through-node distance overstates 2D gap.
+                float g = acc + distFromNode;
+                if (g > maxRange || g >= best.gap) continue;
+
+                best.gap = g;
+                best.bodyIndex = (int) k;
+                best.foul = true;
+                best.buffer = false;
+                best.walkDir = wdir;
+                best.markerVelDir = m->velDir;
+            }
+        }
+
         const auto& ns = track.getSegment (next);
         wdir = (ns.nodeA == exitNode) ? 1 : -1;
         coord = (wdir > 0) ? 0.0f : ns.length;
@@ -142,7 +178,7 @@ bool PhysicsEngine::isBlockedAhead (const TrackGraph& track, size_t index,
 
     auto hit = scanAhead (track, index, lead, outDir, kBlockGap);
 
-    if (hit.buffer)
+    if (hit.buffer || hit.foul)
         return true;
     if (hit.bodyIndex < 0 || hit.gap > kBlockGap)
         return false;
@@ -213,7 +249,16 @@ void PhysicsEngine::step (const TrackGraph& track, float dt)
                 computeEdges (track, i);
             }
 
-            if (hit.bodyIndex >= 0)
+            if (hit.foul)
+            {
+                // Fouling another vehicle at a shared junction: the geometry is
+                // not colinear, so just stop dead at the node rather than
+                // transferring momentum along a single axis.
+                if (std::abs (b.speed) > kContactEps)
+                    contacts.push_back ({ b.segment, b.distance, std::abs (b.speed) });
+                b.speed = 0.0f;
+            }
+            else if (hit.bodyIndex >= 0)
             {
                 // Contact this substep: inelastic momentum transfer,
                 // but only when approaching, never when separating
