@@ -34,6 +34,9 @@ private:
     bool  startPressed = false;
     bool  exitPressed  = false;
 
+    bool primed          = false;   // first update seeds prev* so a held-over
+                                    // button (e.g. the one that dismissed the
+                                    // end screen) isn't read as a fresh press
     bool prevBumperLeft  = false;
     bool prevBumperRight = false;
     bool prevDpadUp      = false;

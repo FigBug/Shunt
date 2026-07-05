@@ -343,12 +343,13 @@ void GameState::placeInitialCars()
 
 void GameState::update (float dt, gin::GameControllerManager& controllers)
 {
+    soundEvents.clear();   // cues raised this tick, drained by the host afterwards
+                           // (cleared before any early-out so stale cues never replay)
+
     if (gameOver || dt <= 0.0f)
         return;
 
     dt = juce::jmin (dt, 0.1f);
-
-    soundEvents.clear();   // cues raised this tick, drained by the host afterwards
 
     for (auto& sw : track.getSwitches())
         sw.cooldown = juce::jmax (0.0f, sw.cooldown - dt);

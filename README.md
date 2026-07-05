@@ -18,9 +18,10 @@ Game controllers (Xbox-style naming):
 | Input | Action |
 |---|---|
 | Left stick ↑/↓ or D-pad ↑/↓ | Throttle forward / reverse |
-| B | Toggle the switch ahead |
+| Y | Toggle the switch ahead |
 | A | Toggle the switch behind |
-| Y | Decouple all cars |
+| B | Decouple all cars |
+| X | Horn |
 
 On the title screen: LB/RB (or ←/→) change the player count, +/− adjusts
 volume, and any other button starts the game.

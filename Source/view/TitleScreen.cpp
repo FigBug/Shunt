@@ -91,6 +91,19 @@ void TitleScreen::update()
         }
     }
 
+    // Seed the edge detectors on the first tick so buttons already held when
+    // the screen appears must be released before they register.
+    if (! primed)
+    {
+        prevBumperRight = anyRight;
+        prevBumperLeft  = anyLeft;
+        prevDpadUp      = anyUp;
+        prevDpadDown    = anyDown;
+        prevStart       = anyStart;
+        primed = true;
+        return;
+    }
+
     const int numMaps = (int) game::getMaps().size();
 
     if (anyRight && ! prevBumperRight) numPlayers = juce::jmin (numPlayers + 1, 4);
