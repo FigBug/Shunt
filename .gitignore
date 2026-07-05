@@ -73,3 +73,6 @@ vcpkg_installed/
 Testing/
 .cache/
 .DS_Store
+
+# local, machine-specific Claude Code permissions
+.claude/settings.local.json
