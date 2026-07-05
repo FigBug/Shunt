@@ -15,6 +15,10 @@ namespace audio
 enum class SoundID
 {
     horn,
+    couple,
+    uncouple,
+    collision,
+    score,
     count
 };
 
@@ -96,9 +100,10 @@ private:
 
     Mixer mixer;
 
-    // Read up to maxSeconds of a sample, with short fades to avoid clicks.
+    // Read a slice of a sample [startSeconds, startSeconds + maxSeconds) with
+    // short fades to avoid clicks.
     void loadSound (SoundID id, const void* data, int size,
-                    float maxSeconds, float fadeOutSeconds);
+                    float maxSeconds, float fadeOutSeconds, float startSeconds = 0.0f);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SoundEngine)
 };

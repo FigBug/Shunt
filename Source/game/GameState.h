@@ -21,7 +21,7 @@ public:
     // each tick (mirrors the Provins pattern). worldPos allows future panning.
     struct SoundEvent
     {
-        enum Type { horn };
+        enum Type { horn, couple, uncouple, collision, score };
         Type               type;
         juce::Point<float> worldPos;
     };
@@ -86,6 +86,7 @@ private:
     std::vector<int>     spawnDropOffOrder;
     int                  nextCarId   = 0;
     bool                 gameOver    = false;
+    float                collisionCooldown = 0.0f;   // rate-limits collision cues
 
     static constexpr float kTrainSpeed    = kEngineTopSpeed;
     static constexpr float kCarSpacing    = 1.6f;

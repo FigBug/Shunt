@@ -13,6 +13,13 @@ SoundEngine::SoundEngine()
     loadSound (SoundID::horn, BinaryData::train_horn_ogg, BinaryData::train_horn_oggSize,
                3.0f /*maxSeconds*/, 0.4f /*fadeOut*/);
 
+    // Short bites of the source recordings; see Assets/sfx/CREDITS.md. Tweak the
+    // (maxSeconds, fadeOut, startSeconds) windows here to reshape any cue.
+    loadSound (SoundID::couple,    BinaryData::couple_ogg,    BinaryData::couple_oggSize,    0.9f, 0.3f);
+    loadSound (SoundID::uncouple,  BinaryData::uncouple_ogg,  BinaryData::uncouple_oggSize,  1.1f, 0.4f, 2.0f);
+    loadSound (SoundID::collision, BinaryData::collision_ogg, BinaryData::collision_oggSize, 1.6f, 0.6f);
+    loadSound (SoundID::score,     BinaryData::score_ogg,     BinaryData::score_oggSize,     1.6f, 0.3f);
+
     auto err = deviceManager.initialiseWithDefaultDevices (0, 2);
     if (err.isNotEmpty())
         DBG ("Audio init error: " + err);
@@ -28,7 +35,7 @@ SoundEngine::~SoundEngine()
 }
 
 void SoundEngine::loadSound (SoundID id, const void* data, int size,
-                             float maxSeconds, float fadeOutSeconds)
+                             float maxSeconds, float fadeOutSeconds, float startSeconds)
 {
     auto stream = std::make_unique<juce::MemoryInputStream> (data, (size_t) size, false);
     std::unique_ptr<juce::AudioFormatReader> reader (formatManager.createReaderFor (std::move (stream)));
@@ -38,11 +45,13 @@ void SoundEngine::loadSound (SoundID id, const void* data, int size,
 
     auto sr = reader->sampleRate > 0 ? reader->sampleRate : 44100.0;
     int total = (int) reader->lengthInSamples;
-    int wanted = maxSeconds > 0.0f ? juce::jmin (total, (int) (maxSeconds * sr)) : total;
+    int start = juce::jlimit (0, total, (int) (startSeconds * sr));
+    int avail = total - start;
+    int wanted = maxSeconds > 0.0f ? juce::jmin (avail, (int) (maxSeconds * sr)) : avail;
 
     auto& buf = buffers[(size_t) id];
     buf.setSize ((int) reader->numChannels, wanted);
-    reader->read (&buf, 0, wanted, 0, true, true);
+    reader->read (&buf, 0, wanted, start, true, true);
 
     // Small fade-in kills the initial click; fade-out smooths the trimmed tail.
     int fadeIn = juce::jmin (wanted, (int) (0.005 * sr));

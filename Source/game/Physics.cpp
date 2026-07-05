@@ -158,6 +158,8 @@ bool PhysicsEngine::isBlockedAhead (const TrackGraph& track, size_t index,
 
 void PhysicsEngine::step (const TrackGraph& track, float dt)
 {
+    contacts.clear();
+
     for (auto& b : bodies)
         b.moved = 0.0f;
 
@@ -222,6 +224,8 @@ void PhysicsEngine::step (const TrackGraph& track, float dt)
 
                 if (b.speed != 0.0f && va - vo > kContactEps)
                 {
+                    contacts.push_back ({ b.segment, b.distance, va - vo });
+
                     if (std::abs (vo) <= kContactEps
                         && isBlockedAhead (track, (size_t) hit.bodyIndex,
                                            hit.markerVelDir * hit.walkDir, 0))
@@ -240,6 +244,8 @@ void PhysicsEngine::step (const TrackGraph& track, float dt)
             else if (hit.buffer)
             {
                 // Fully blocked against the end of the track
+                if (std::abs (b.speed) > kContactEps)
+                    contacts.push_back ({ b.segment, b.distance, std::abs (b.speed) });
                 b.speed = 0.0f;
             }
         }

@@ -426,6 +426,25 @@ void GameState::update (float dt, gin::GameControllerManager& controllers)
 
     physics.step (track, dt);
 
+    // Collision cue: fire on the hardest fresh impact, rate-limited so a single
+    // crash (resolved over several sub-steps) doesn't machine-gun the sound.
+    collisionCooldown = juce::jmax (0.0f, collisionCooldown - dt);
+    if (collisionCooldown <= 0.0f)
+    {
+        constexpr float kCollisionSpeed = 2.5f;   // closing speed to count as a crash
+        const PhysicsEngine::Contact* hardest = nullptr;
+        for (const auto& ct : physics.getContacts())
+            if (ct.speed > kCollisionSpeed && (hardest == nullptr || ct.speed > hardest->speed))
+                hardest = &ct;
+
+        if (hardest != nullptr)
+        {
+            soundEvents.push_back ({ SoundEvent::collision,
+                                     track.worldPos ({ hardest->segment, hardest->distance }) });
+            collisionCooldown = 0.15f;
+        }
+    }
+
     // Read positions back from the physics bodies
     for (auto& p : players)
     {
@@ -537,6 +556,7 @@ void GameState::decoupleAll (Player& p, float engineSpeed)
     // rear cars face away from the engine, so the sign flips
     dropAll (p.frontCars, p.dir, engineSpeed);
     dropAll (p.rearCars, -p.dir, -engineSpeed);
+    soundEvents.push_back ({ SoundEvent::uncouple, track.worldPos (p.pos) });
     p.hasColourLock = false;
     p.recoupleLock = true;
     p.recoupleLockDist = 0.0f;
@@ -584,6 +604,8 @@ void GameState::checkCoupling (Player& p)
             else
                 p.rearCars.push_back (c.id);
 
+            soundEvents.push_back ({ SoundEvent::couple, carWorld });
+
             nextFrontSlot = track.worldPos (
                 track.advance (p.pos, p.dir, (float) (p.frontCars.size() + 1) * kCarSpacing).pos);
             nextRearSlot = track.worldPos (
@@ -620,6 +642,7 @@ void GameState::checkScoring (Player& p)
                         cars.end());
                     list.erase (list.begin() + i);
                     p.score++;
+                    soundEvents.push_back ({ SoundEvent::score, dzPos });
                     return true;
                 }
             }

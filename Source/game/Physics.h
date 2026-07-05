@@ -37,6 +37,12 @@ public:
 
     const std::vector<PhysBody>& getBodies() const { return bodies; }
 
+    // Approaching impacts resolved during the last step(). `speed` is the
+    // closing speed at contact — larger means a harder hit. Location is on the
+    // track so the host can place a collision sound.
+    struct Contact { int segment = 0; float distance = 0.0f; float speed = 0.0f; };
+    const std::vector<Contact>& getContacts() const { return contacts; }
+
 private:
     // A body's collision surface, transported along the track from its centre.
     // velDir is the coordinate direction of positive body speed at this point,
@@ -67,6 +73,7 @@ private:
 
     std::vector<PhysBody> bodies;
     std::vector<BodyEdges> edges;
+    std::vector<Contact> contacts;
     int nextBodyId = 0;
 
     static constexpr int   kSubSteps = 4;
