@@ -144,6 +144,31 @@ void MainComponent::timerCallback()
 
     state->update (dt, controllers);
 
+    // Drive one synthesised engine voice per player from its live speed, and
+    // play any one-shot cues (horn) raised this tick.
+    {
+        const auto& players = state->getPlayers();
+        const auto& track   = state->getTrack();
+        for (int i = 0; i < audio::SoundEngine::kMaxEngines; ++i)
+        {
+            if (i < (int) players.size())
+            {
+                const auto& pl = players[(size_t) i];
+                float speed01 = juce::jmin (1.0f, std::abs (pl.speed) / game::kEngineTopSpeed);
+                float pan     = state->panForWorldX (track.worldPos (pl.pos).x);
+                soundEngine.setEngine (i, true, speed01, pan);
+            }
+            else
+            {
+                soundEngine.setEngine (i, false, 0.0f);
+            }
+        }
+
+        for (const auto& ev : state->getSoundEvents())
+            if (ev.type == game::GameState::SoundEvent::horn)
+                soundEngine.play (audio::SoundID::horn, 0.9f, state->panForWorldX (ev.worldPos.x));
+    }
+
     gameView->repaint();
     hud->repaint();
 
@@ -165,6 +190,8 @@ void MainComponent::timerCallback()
 void MainComponent::returnToTitle()
 {
     inGame = false;
+
+    soundEngine.stopAllEngines();
 
     removeChildComponent (gameView.get());
     removeChildComponent (hud.get());

@@ -8,6 +8,7 @@
 #include "view/GameView.h"
 #include "view/Hud.h"
 #include "view/TitleScreen.h"
+#include "audio/SoundEngine.h"
 
 class MainComponent : public juce::Component,
                       private juce::Timer
@@ -28,6 +29,7 @@ private:
 
     juce::ScopedLowPowerModeDisabler        keepAwake;
     gin::GameControllerManager              controllers;
+    audio::SoundEngine                      soundEngine;
     std::unique_ptr<view::TitleScreen>      titleScreen;
     std::unique_ptr<game::GameState>        state;
     std::unique_ptr<view::GameView>         gameView;

@@ -17,6 +17,16 @@ public:
 
     void update (float dt, gin::GameControllerManager& controllers);
 
+    // Fire-and-forget audio cues raised during update(), drained by the host
+    // each tick (mirrors the Provins pattern). worldPos allows future panning.
+    struct SoundEvent
+    {
+        enum Type { horn };
+        Type               type;
+        juce::Point<float> worldPos;
+    };
+    const std::vector<SoundEvent>& getSoundEvents() const noexcept { return soundEvents; }
+
     const TrackGraph&          getTrack()   const noexcept { return track; }
     TrackGraph&                getTrack()         noexcept { return track; }
     const std::vector<Player>& getPlayers() const noexcept { return players; }
@@ -29,6 +39,10 @@ public:
 
     juce::Point<float> carWorldPos (const Player& p, bool front, int index) const;
     float              carAngle    (const Player& p, bool front, int index) const;
+
+    // Stereo pan in [-1, 1] for a world X, mapped across the track's horizontal
+    // extent (matches the on-screen camera framing). Used to place sounds.
+    float              panForWorldX (float worldX) const;
 
     bool canToggleSwitch (int switchNode) const;
 
@@ -68,11 +82,12 @@ private:
     PhysicsEngine        physics;
     std::vector<Player>  players;
     std::vector<Car>     cars;
+    std::vector<SoundEvent> soundEvents;
     std::vector<int>     spawnDropOffOrder;
     int                  nextCarId   = 0;
     bool                 gameOver    = false;
 
-    static constexpr float kTrainSpeed    = 8.0f;
+    static constexpr float kTrainSpeed    = kEngineTopSpeed;
     static constexpr float kCarSpacing    = 1.6f;
     static constexpr float kVehicleHalfLen = 0.8f;
     static constexpr float kEngineMass    = 3.0f;

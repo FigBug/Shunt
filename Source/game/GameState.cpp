@@ -348,6 +348,8 @@ void GameState::update (float dt, gin::GameControllerManager& controllers)
 
     dt = juce::jmin (dt, 0.1f);
 
+    soundEvents.clear();   // cues raised this tick, drained by the host afterwards
+
     for (auto& sw : track.getSwitches())
         sw.cooldown = juce::jmax (0.0f, sw.cooldown - dt);
 
@@ -379,6 +381,7 @@ void GameState::update (float dt, gin::GameControllerManager& controllers)
                 bool toggleFwd  = c->isButtonDown (B::faceRight);   // B = switch ahead
                 bool toggleBack = c->isButtonDown (B::faceDown);    // A = switch behind
                 bool uncouple   = c->isButtonDown (B::faceUp);      // Y = decouple
+                bool horn       = c->isButtonDown (B::faceLeft);    // X = horn
 
                 toggleFwdEdge  = toggleFwd  && ! p.prevToggleFwd;
                 toggleBackEdge = toggleBack && ! p.prevToggleBack;
@@ -386,6 +389,10 @@ void GameState::update (float dt, gin::GameControllerManager& controllers)
                 p.prevToggleFwd  = toggleFwd;
                 p.prevToggleBack = toggleBack;
                 p.prevUncouple   = uncouple;
+
+                if (horn && ! p.prevHorn)
+                    soundEvents.push_back ({ SoundEvent::horn, track.worldPos (p.pos) });
+                p.prevHorn = horn;
             }
         }
 
@@ -426,6 +433,7 @@ void GameState::update (float dt, gin::GameControllerManager& controllers)
         {
             p.pos = { b->segment, b->distance };
             p.dir = b->dir;
+            p.speed = b->speed;
 
             // A train trailing through a switch (leg -> stem) forces the points
             // to the leg it came from. This also keeps the trailing cars — whose
@@ -833,6 +841,27 @@ juce::Point<float> GameState::carWorldPos (const Player& p, bool front, int inde
     int walkDir = front ? p.dir : -p.dir;
     auto result = track.advance (p.pos, walkDir, dist);
     return track.worldPos (result.pos);
+}
+
+float GameState::panForWorldX (float worldX) const
+{
+    if (track.numNodes() == 0)
+        return 0.0f;
+
+    float minX = 1.0e9f, maxX = -1.0e9f;
+    for (int i = 0; i < track.numNodes(); ++i)
+    {
+        float x = track.getNode (i).position.x;
+        minX = juce::jmin (minX, x);
+        maxX = juce::jmax (maxX, x);
+    }
+
+    float centre = (minX + maxX) * 0.5f;
+    float halfW  = (maxX - minX) * 0.5f + 4.0f;   // pad matches the camera framing
+    if (halfW <= 0.0f)
+        return 0.0f;
+
+    return juce::jlimit (-1.0f, 1.0f, (worldX - centre) / halfW);
 }
 
 float GameState::carAngle (const Player& p, bool front, int index) const

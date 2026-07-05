@@ -9,6 +9,10 @@ namespace game
 
 enum class CarColour { red, blue, green, yellow, count };
 
+// Throttle top speed (matches GameState::kTrainSpeed); used to normalise engine
+// speed for the audio layer.
+inline constexpr float kEngineTopSpeed = 8.0f;
+
 struct Car
 {
     int id = 0;
@@ -49,6 +53,7 @@ struct Player
     int dir = 1;
     int bodyId = -1;
     int prevSegment = -1;   // engine segment last frame, for detecting crossings
+    float speed = 0.0f;     // engine's actual speed this frame (from physics), for audio
 
     std::vector<int> frontCars;
     std::vector<int> rearCars;
@@ -61,6 +66,7 @@ struct Player
     bool prevToggleFwd  = false;
     bool prevToggleBack = false;
     bool prevUncouple   = false;
+    bool prevHorn       = false;
     bool recoupleLock       = false;
     float recoupleLockDist  = 0.0f;
 
