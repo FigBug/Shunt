@@ -23,6 +23,7 @@ SoundEngine::SoundEngine()
     loadSound (SoundID::uncouple,  "uncouple");
     loadSound (SoundID::collision, "collision");
     loadSound (SoundID::score,     "score");
+    loadSound (SoundID::points,    "points");
 
     // Precompute the horn's sustain loop: the centre 50% of the file, with a
     // ~30ms crossfade (capped to half the loop) to hide the wrap-around click.

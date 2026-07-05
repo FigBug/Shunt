@@ -463,7 +463,15 @@ void GameState::update (float dt, gin::GameControllerManager& controllers)
                 for (auto& sw : track.getSwitches())
                     if (p.pos.segment == sw.stemSegment
                         && (p.prevSegment == sw.normalSegment || p.prevSegment == sw.reverseSegment))
-                        sw.reversed = (p.prevSegment == sw.reverseSegment);
+                    {
+                        bool aligned = (p.prevSegment == sw.reverseSegment);
+                        if (sw.reversed != aligned)   // points actually moved (trailed through)
+                        {
+                            sw.reversed = aligned;
+                            soundEvents.push_back ({ SoundEvent::points,
+                                                     track.getNode (sw.node).position });
+                        }
+                    }
             }
             p.prevSegment = p.pos.segment;
 
@@ -522,6 +530,8 @@ void GameState::handleActions (Player& p, float engineSpeed, bool toggleFwd, boo
                 {
                     sw->reversed = ! sw->reversed;
                     sw->cooldown = 0.5f;
+                    soundEvents.push_back ({ SoundEvent::points,
+                                             track.getNode (sw->node).position });
                 }
             }
         }
@@ -1248,6 +1258,8 @@ float GameState::aiUpdate (Player& p, float dt)
                     {
                         sw->cooldown = 0.5f;
                         brain.switchCooldown = 0.3f;
+                        soundEvents.push_back ({ SoundEvent::points,
+                                                 track.getNode (sw->node).position });
                     }
                     else
                     {

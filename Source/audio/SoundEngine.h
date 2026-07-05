@@ -19,6 +19,7 @@ enum class SoundID
     uncouple,
     collision,
     score,
+    points,     // a switch being thrown
     count
 };
 

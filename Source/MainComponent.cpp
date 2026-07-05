@@ -183,6 +183,7 @@ void MainComponent::timerCallback()
                 case SE::uncouple:  soundEngine.play (audio::SoundID::uncouple,  0.6f, pan); break;
                 case SE::collision: soundEngine.play (audio::SoundID::collision, 0.8f, pan); break;
                 case SE::score:     soundEngine.play (audio::SoundID::score,     0.9f, pan); break;
+                case SE::points:    soundEngine.play (audio::SoundID::points,    0.7f, pan); break;
             }
         }
     }

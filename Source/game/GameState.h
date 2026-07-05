@@ -21,7 +21,7 @@ public:
     // each tick (mirrors the Provins pattern). worldPos allows future panning.
     struct SoundEvent
     {
-        enum Type { horn, couple, uncouple, collision, score };
+        enum Type { horn, couple, uncouple, collision, score, points };
         Type               type;
         juce::Point<float> worldPos;
     };
