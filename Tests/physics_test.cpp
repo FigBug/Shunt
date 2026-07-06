@@ -28,6 +28,7 @@ public:
         switches.push_back({node,stem,normal,reverse,false,0.0f});
     }
     const TrackSegment& getSegment(int i) const { return segments[i]; }
+    int numSegments() const { return (int)segments.size(); }
     const SwitchInfo* findSwitch(int node) const {
         for (auto& sw : switches) if (sw.node == node) return &sw;
         return nullptr;
@@ -396,6 +397,53 @@ TEST(game_sim_ram_buffer) {
         ASSERT(p.findBody(f[i])->speed >= -0.01f);
 }
 
+// ======================== SWITCH / JUNCTION FOULING ========================
+
+// Build a Y switch: stem(n0-n1) splits at n1 into normal(n1-n2) and reverse(n1-n3).
+static game::TrackGraph makeSwitch(int& stem, int& norm, int& rev) {
+    game::TrackGraph t;
+    int n0=t.addNode(0,0), n1=t.addNode(50,0), n2=t.addNode(100,0), n3=t.addNode(100,20);
+    stem=t.addSegment(n0,n1); norm=t.addSegment(n1,n2); rev=t.addSegmentLen(n1,n3,54.0f);
+    t.addSwitch(n1, stem, norm, rev);
+    return t;
+}
+
+TEST(switch_frog_foul_blocks_crossing) {
+    // A car parked fouling the frog on the reverse leg must block a train coming
+    // through the switch stem->normal; they must not pass through each other.
+    int stem,norm,rev; auto t=makeSwitch(stem,norm,rev);
+    game::PhysicsEngine p;
+    int a=p.addBody(stem,45.0f,1,1.0f,0.0f);   // approaching frog on the stem
+    int c=p.addBody(rev,0.5f,1,1.0f,0.0f);     // fouling the frog on the reverse leg
+    for (int i=0;i<200;i++){ p.findBody(a)->speed=4.0f; p.step(t,0.016f); }
+    ASSERT(p.findBody(a)->segment == stem);          // stopped at the frog, never onto normal
+    NEAR(p.findBody(c)->distance, 0.5f, 0.1f);        // fouling car essentially untouched
+}
+
+TEST(switch_converging_no_passthrough) {
+    // Two cars converge on the frog from the stem and the reverse leg. Neither
+    // may slide through the junction past the other.
+    int stem,norm,rev; auto t=makeSwitch(stem,norm,rev);
+    game::PhysicsEngine p;
+    int a=p.addBody(stem,45.0f,1,1.0f,0.0f);
+    int b=p.addBody(rev,3.0f,-1,1.0f,0.0f);   // facing the frog
+    for (int i=0;i<200;i++){ p.findBody(a)->speed=4.0f; p.findBody(b)->speed=4.0f; p.step(t,0.016f); }
+    // Never on the far leg past the other: A must not reach onto normal.
+    ASSERT(!(p.findBody(a)->segment==norm && p.findBody(a)->distance>1.0f));
+}
+
+TEST(switch_clear_car_still_passes) {
+    // A car parked well clear of the frog on the reverse leg must NOT block the
+    // normal route (no false stalls at switches).
+    int stem,norm,rev; auto t=makeSwitch(stem,norm,rev);
+    game::PhysicsEngine p;
+    int a=p.addBody(stem,45.0f,1,1.0f,0.0f);
+    int c=p.addBody(rev,10.0f,1,1.0f,0.0f);    // 10 units down the reverse leg — clear
+    for (int i=0;i<200;i++){ p.findBody(a)->speed=4.0f; p.step(t,0.016f); }
+    ASSERT(p.findBody(a)->segment == norm);     // sailed through
+    NEAR(p.findBody(c)->distance, 10.0f, 0.01f);
+}
+
 // ======================== MAIN ========================
 int main() {
     printf("Track Physics Tests:\n");
@@ -417,6 +465,9 @@ int main() {
     RUN(collision_across_segments);
     RUN(collision_on_flipped_segment);
     RUN(switch_diverging_no_collision);
+    RUN(switch_frog_foul_blocks_crossing);
+    RUN(switch_converging_no_passthrough);
+    RUN(switch_clear_car_still_passes);
     RUN(persistent_bodies);
     RUN(game_sim_ram_buffer);
     printf("\n%d passed, %d failed\n", gPass, gFail);

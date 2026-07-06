@@ -63,6 +63,26 @@ PhysicsEngine::ScanHit PhysicsEngine::scanAhead (const TrackGraph& track, size_t
 {
     ScanHit best;
 
+    auto sharedNode = [&] (int s1, int s2) -> int
+    {
+        const auto& a = track.getSegment (s1);
+        const auto& b = track.getSegment (s2);
+        if (a.nodeA == b.nodeA || a.nodeA == b.nodeB) return a.nodeA;
+        if (a.nodeB == b.nodeA || a.nodeB == b.nodeB) return a.nodeB;
+        return -1;
+    };
+    auto incidentCount = [&] (int node) -> int
+    {
+        if (node < 0) return 0;
+        int c = 0;
+        for (int i = 0; i < track.numSegments(); ++i)
+        {
+            const auto& s = track.getSegment (i);
+            if (s.nodeA == node || s.nodeB == node) ++c;
+        }
+        return c;
+    };
+
     int seg = from.segment;
     float coord = from.distance;
     int wdir = outDir;
@@ -97,6 +117,13 @@ PhysicsEngine::ScanHit PhysicsEngine::scanAhead (const TrackGraph& track, size_t
                 best.buffer = false;
                 best.walkDir = wdir;
                 best.markerVelDir = m->velDir;
+
+                // If this body's centre is on a different leg, its surface has
+                // straddled onto our line. When the join is a junction (>=3
+                // legs) it is fouling from a diverging route, so block it
+                // instead of shoving it along a single axis.
+                best.foul = (bodies[k].segment != seg)
+                            && incidentCount (sharedNode (bodies[k].segment, seg)) >= 3;
             }
         }
 
@@ -118,39 +145,42 @@ PhysicsEngine::ScanHit PhysicsEngine::scanAhead (const TrackGraph& track, size_t
             break;
         }
 
-        // Foul check: a body sitting near this node on any *other* leg (not the
-        // one we came from, not the routed one) shares the physical junction, so
-        // it blocks the node. This is what stops vehicles sliding through each
-        // other at switches and diamond crossings.
+        // Foul check: a junction (switch/crossing) admits one vehicle at a time.
+        // If another body's own extent reaches this node from a *different* leg
+        // (not the one we came from, not the routed one), it occupies the
+        // junction, so we must stop at the node rather than cross into it. This
+        // is what stops vehicles sliding through each other at points and
+        // diamond crossings — where the routed path never scans the other legs.
         for (size_t k = 0; k < bodies.size(); ++k)
         {
             if (k == selfIndex || ! bodies[k].active) continue;
+            const auto& ob = bodies[k];
+            if (ob.segment == seg || ob.segment == next) continue;   // same / routed leg
 
-            for (const Edge* m : { &edges[k].front, &edges[k].back })
+            const auto& os = track.getSegment (ob.segment);
+            float centreToNode, radiusToNode;
+            if (os.nodeA == exitNode)
             {
-                if (m->segment == seg || m->segment == next) continue;
+                centreToNode = ob.distance;
+                radiusToNode = (ob.dir > 0) ? ob.radiusBack : ob.radiusFwd;
+            }
+            else if (os.nodeB == exitNode)
+            {
+                centreToNode = os.length - ob.distance;
+                radiusToNode = (ob.dir > 0) ? ob.radiusFwd : ob.radiusBack;
+            }
+            else continue;   // not incident to this node
 
-                const auto& ms = track.getSegment (m->segment);
-                float distFromNode;
-                if (ms.nodeA == exitNode)      distFromNode = m->distance;
-                else if (ms.nodeB == exitNode) distFromNode = ms.length - m->distance;
-                else continue;   // not incident to this node
+            if (centreToNode >= radiusToNode + kContactEps) continue;   // stops short of the node
 
-                if (distFromNode < -kContactEps) continue;
-
-                // 1D distance through the node to the sibling's surface. Kept in
-                // step with the movement range so we only foul at real contact —
-                // a wider range would falsely stall cars near (but clear of) the
-                // junction, since 1D-through-node distance overstates 2D gap.
-                float g = acc + distFromNode;
-                if (g > maxRange || g >= best.gap) continue;
-
-                best.gap = g;
+            if (acc < best.gap)   // block our surface at the node
+            {
+                best.gap = acc;
                 best.bodyIndex = (int) k;
                 best.foul = true;
                 best.buffer = false;
                 best.walkDir = wdir;
-                best.markerVelDir = m->velDir;
+                best.markerVelDir = 0;
             }
         }
 
