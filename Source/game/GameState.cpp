@@ -650,7 +650,16 @@ void GameState::checkScoring (Player& p)
         {
             for (int i = (int) list.size() - 1; i >= 0; --i)
             {
-                float cd = carWorldPos (p, front, i).getDistanceFrom (dzPos);
+                // The drop-off lives on a specific track. Require the car to be
+                // on a segment that actually runs through the drop-off node, so a
+                // car merely passing close on a parallel track can't score — you
+                // have to pass over the drop-off itself.
+                auto carPos = carTrackPos (p, front, i);
+                const auto& seg = track.getSegment (carPos.segment);
+                if (seg.nodeA != dz.node && seg.nodeB != dz.node)
+                    continue;
+
+                float cd = track.worldPos (carPos).getDistanceFrom (dzPos);
                 if (cd < kScoreDistance)
                 {
                     int carId = list[(size_t) i];
@@ -858,36 +867,16 @@ bool GameState::canToggleSwitch (int switchNode) const
     return sw->cooldown <= 0.0f && ! isSwitchOccupied (switchNode);
 }
 
-int GameState::dropOffNodeFor (int colourIndex) const
+TrackPos GameState::carTrackPos (const Player& p, bool front, int index) const
 {
-    for (const auto& dz : track.getDropOffs())
-        if (dz.colourIndex == colourIndex)
-            return dz.node;
-    return -1;
-}
-
-bool GameState::isRightSidePickup (const Player& p, juce::Point<float> carWorld, int colourIndex) const
-{
-    int node = dropOffNodeFor (colourIndex);
-    if (node < 0) return true;   // no drop-off constraint
-
-    auto dropWorld = track.getNode (node).position;
-    auto engineWorld = track.worldPos (p.pos);
-
-    // The engine ends up on the side of the car it approached from. If the
-    // engine and the drop-off are on opposite sides of the car, the engine can
-    // keep going and push the car toward the drop-off — the deliverable side.
-    auto toEngine = engineWorld - carWorld;
-    auto toDrop   = dropWorld  - carWorld;
-    return (toEngine.x * toDrop.x + toEngine.y * toDrop.y) < 0.0f;
+    float dist = (float) (index + 1) * kCarSpacing;
+    int walkDir = front ? p.dir : -p.dir;
+    return track.advance (p.pos, walkDir, dist).pos;
 }
 
 juce::Point<float> GameState::carWorldPos (const Player& p, bool front, int index) const
 {
-    float dist = (float) (index + 1) * kCarSpacing;
-    int walkDir = front ? p.dir : -p.dir;
-    auto result = track.advance (p.pos, walkDir, dist);
-    return track.worldPos (result.pos);
+    return track.worldPos (carTrackPos (p, front, index));
 }
 
 float GameState::panForWorldX (float worldX) const
@@ -936,6 +925,7 @@ float GameState::aiUpdate (Player& p, float dt)
     if (rethink)
         brain.thinkTimer = 0.2f;
 
+
     // State transitions — always check, not just on rethink
     if (brain.state == AiBrain::idle)
     {
@@ -943,6 +933,16 @@ float GameState::aiUpdate (Player& p, float dt)
             brain.state = AiBrain::returningHome;
         else
             brain.state = AiBrain::seekingCar;
+    }
+
+    // Once we've coupled a car, head home. This must run before the seekingCar
+    // logic below, which returns early when there are no free cars left to
+    // target — otherwise coupling the last car leaves us stuck in seekingCar.
+    if (brain.state == AiBrain::seekingCar && p.totalCars() > 0)
+    {
+        brain.state = AiBrain::returningHome;
+        brain.targetCarId = -1;
+        brain.path.clear();
     }
 
     // Leave drop-off: just drive forward until we've passed a switch
@@ -968,39 +968,21 @@ float GameState::aiUpdate (Player& p, float dt)
         return kTrainSpeed * 0.7f;
     }
 
-    // Dumping: we couldn't deliver (car on the wrong side for the drop-off), so
-    // haul it back out into open track, drop it, and go find a fresh pickup.
-    // Having pulled it out to the anti-drop-off side, the re-approach is now the
-    // deliverable one.
-    if (brain.state == AiBrain::dumping)
+    // Backing off to break a jam (usually against another engine): reverse for a
+    // moment, then re-path and re-target from the new spot.
+    if (brain.backoffTimer > 0.0f)
     {
-        int node = dropOffNodeFor ((int) p.carryColour);
-        auto dropWorld = (node >= 0) ? track.getNode (node).position
-                                     : track.worldPos (p.pos);
-        float distFromDrop = track.worldPos (p.pos).getDistanceFrom (dropWorld);
+        brain.backoffTimer -= dt;
+        if (brain.backoffTimer > 0.0f)
+            return (float) brain.backoffDir * kTrainSpeed * 0.7f;
 
-        // Which way is away from the drop-off?
-        auto fwd = track.worldPos (track.advance (p.pos,  p.dir, 1.0f).pos);
-        auto bwd = track.worldPos (track.advance (p.pos, -p.dir, 1.0f).pos);
-        int away = (fwd.getDistanceFrom (dropWorld) >= bwd.getDistanceFrom (dropWorld)) ? 1 : -1;
-
-        brain.stuckCount++;
-        if (distFromDrop > kScoreDistance * 3.0f || brain.stuckCount > 90)
-        {
-            decoupleAll (p, 0.0f);
-            brain.state = AiBrain::seekingCar;
-            brain.targetCarId = -1;
-            brain.path.clear();
-            brain.stuckCount = 0;
-            return 0.0f;
-        }
-
-        return (float) away * kTrainSpeed * 0.7f;
+        brain.path.clear();
+        brain.targetCarId = -1;
+        brain.dirSign = 0;
     }
 
     if (rethink)
     {
-
         // Stuck detection: if we haven't moved much, pick a new target
         auto curWorld = track.worldPos (p.pos);
         if (brain.lastPos.getDistanceFrom (curWorld) < 0.5f)
@@ -1009,10 +991,28 @@ float GameState::aiUpdate (Player& p, float dt)
             brain.stuckCount = 0;
         brain.lastPos = curWorld;
 
-        if (brain.stuckCount > 15)
+        if (brain.stuckCount > 10)
         {
+            // Distinguish a real jam from a slow delivery manoeuvre: only reverse
+            // out if another engine is right on top of us (nose-to-tail deadlock).
+            // Otherwise just drop the target and re-plan.
+            float nearestEngine = 1.0e9f;
+            auto myW = track.worldPos (p.pos);
+            for (const auto& other : players)
+                if (&other != &p)
+                    nearestEngine = std::min (nearestEngine,
+                                              myW.getDistanceFrom (track.worldPos (other.pos)));
+
+            brain.stuckCount  = 0;
             brain.targetCarId = -1;
-            brain.stuckCount = 0;
+            brain.path.clear();
+
+            if (nearestEngine < 3.5f)   // wedged against another engine — back off
+            {
+                brain.backoffTimer = 1.2f;
+                brain.backoffDir   = (brain.dirSign != 0) ? -brain.dirSign : -1;
+                return (float) brain.backoffDir * kTrainSpeed * 0.7f;
+            }
         }
     }
 
@@ -1032,26 +1032,26 @@ float GameState::aiUpdate (Player& p, float dt)
         if (rethink && brain.targetCarId < 0)
         {
             auto locoWorld = track.worldPos (p.pos);
-            std::vector<std::pair<float, int>> rightSide, wrongSide;
+            std::vector<std::pair<float, int>> unblocked, anyCar;
 
             for (const auto& c : cars)
             {
                 if (! c.free) continue;
                 if (p.hasColourLock && c.colour != p.carryColour)
                     continue;
-                if (engineBlocksTarget (p, c.pos))   // another engine is in the way
-                    continue;
-                auto carWorld = track.worldPos (c.pos);
-                float d = locoWorld.getDistanceFrom (carWorld);
-                if (isRightSidePickup (p, carWorld, (int) c.colour))
-                    rightSide.push_back ({ d, c.id });
-                else
-                    wrongSide.push_back ({ d, c.id });
+                float d = locoWorld.getDistanceFrom (track.worldPos (c.pos));
+
+                // Always a fallback candidate, even if an engine is in the way —
+                // deferring to blockers forever is how the AI ends up idle.
+                anyCar.push_back ({ d, c.id });
+
+                if (! engineBlocksTarget (p, c.pos))   // another engine is in the way
+                    unblocked.push_back ({ d, c.id });
             }
 
-            // Prefer cars we can approach from the deliverable side; only fall
-            // back to a wrong-side pickup if there's nothing better.
-            auto& candidates = ! rightSide.empty() ? rightSide : wrongSide;
+            // Prefer an unblocked car; fall back to a blocked one so we head
+            // toward it and let the physics clear the standoff instead of idling.
+            auto& candidates = ! unblocked.empty() ? unblocked : anyCar;
             if (! candidates.empty())
             {
                 std::sort (candidates.begin(), candidates.end());
@@ -1114,32 +1114,6 @@ float GameState::aiUpdate (Player& p, float dt)
             bool blocked = engineBlocksTarget (p, brain.targetPos);
             brain.waitCount = blocked ? brain.waitCount + 1 : 0;
             brain.waiting = blocked && brain.waitCount < kMaxWaitRethinks;
-        }
-
-        // Wrong-side detection: if we're parked right at the drop-off with cars
-        // still aboard and nothing is scoring, the car is on the undeliverable
-        // side. Bail out and dump it so we can re-approach the right way.
-        if (rethink)
-        {
-            bool delivered = (p.totalCars() < brain.lastCarCount);
-            brain.lastCarCount = p.totalCars();
-
-            float dToDrop = track.worldPos (p.pos).getDistanceFrom (targetWorld);
-            if (delivered)
-                brain.homeStuck = 0;
-            else if (! brain.waiting && p.totalCars() > 0 && dToDrop < kScoreDistance * 2.5f)
-                brain.homeStuck++;
-            else
-                brain.homeStuck = 0;
-
-            if (brain.homeStuck > 8)
-            {
-                brain.state = AiBrain::dumping;
-                brain.homeStuck = 0;
-                brain.stuckCount = 0;
-                brain.path.clear();
-                return 0.0f;
-            }
         }
 
         if (brain.waiting)
@@ -1279,16 +1253,10 @@ float GameState::aiUpdate (Player& p, float dt)
         }
     }
 
-    // State transitions (coupling/scoring results show up after the physics step)
-    if (brain.state == AiBrain::seekingCar && p.totalCars() > 0)
-    {
-        brain.state = AiBrain::returningHome;
-        brain.targetCarId = -1;
-        brain.path.clear();
-        brain.homeStuck = 0;
-        brain.lastCarCount = p.totalCars();
-    }
-    else if (brain.state == AiBrain::returningHome && p.totalCars() == 0)
+    // Delivered everything — leave the drop-off before seeking again. (The
+    // seekingCar -> returningHome transition is handled at the top, so it fires
+    // even when no free cars remain to target.)
+    if (brain.state == AiBrain::returningHome && p.totalCars() == 0)
     {
         brain.state = AiBrain::leavingDropOff;
         brain.path.clear();
