@@ -15,7 +15,8 @@ void PhysicsEngine::clear()
     nextBodyId = 0;
 }
 
-int PhysicsEngine::addBody (int segment, float distance, int dir, float mass, float friction)
+int PhysicsEngine::addBody (int segment, float distance, int dir, float mass, float friction,
+                            bool isEngine)
 {
     PhysBody b;
     b.id = nextBodyId++;
@@ -24,6 +25,7 @@ int PhysicsEngine::addBody (int segment, float distance, int dir, float mass, fl
     b.dir = dir;
     b.mass = mass;
     b.friction = friction;
+    b.isEngine = isEngine;
     bodies.push_back (b);
     return b.id;
 }
@@ -346,6 +348,39 @@ void PhysicsEngine::step (const TrackGraph& track, float dt)
 
             resolve (edges[i].front, edges[i].front.velDir, -b.dir);
             resolve (edges[i].back, -edges[i].back.velDir, b.dir);
+        }
+
+        // 4. Engine-vs-engine overlap. Two driven trains never couple, so they
+        // must never share a spot. The edge-scan above misses the case where two
+        // engines meet head-on at a junction and stack (their consists point the
+        // same way, so neither scans toward the other's centre). Push any pair
+        // whose centres are on the same segment and closer than a car-length
+        // straight apart along the rail — this can't fire during coupling, which
+        // is engine-to-free-car, not engine-to-engine.
+        constexpr float kEngineMinGap = 0.8f;
+        for (size_t i = 0; i < bodies.size(); ++i)
+        {
+            if (! bodies[i].active || ! bodies[i].isEngine) continue;
+            for (size_t j = i + 1; j < bodies.size(); ++j)
+            {
+                if (! bodies[j].active || ! bodies[j].isEngine) continue;
+                if (bodies[i].segment != bodies[j].segment) continue;
+
+                float gap = bodies[j].distance - bodies[i].distance;
+                if (std::abs (gap) >= kEngineMinGap) continue;
+
+                float push = std::min (0.15f, (kEngineMinGap - std::abs (gap)) * 0.5f);
+                int iDir = (gap >= 0.0f) ? -1 : 1;   // i retreats away from j (ties: i down, j up)
+
+                auto ri = track.advance ({ bodies[i].segment, bodies[i].distance }, iDir, push);
+                bodies[i].segment = ri.pos.segment;
+                bodies[i].distance = ri.pos.distance;
+                auto rj = track.advance ({ bodies[j].segment, bodies[j].distance }, -iDir, push);
+                bodies[j].segment = rj.pos.segment;
+                bodies[j].distance = rj.pos.distance;
+                computeEdges (track, i);
+                computeEdges (track, j);
+            }
         }
     }
 

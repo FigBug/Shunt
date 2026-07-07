@@ -1,4 +1,6 @@
 #include "Hud.h"
+#include <algorithm>
+#include <vector>
 
 namespace view
 {
@@ -60,39 +62,89 @@ void Hud::paint (juce::Graphics& g)
 
     if (state.isGameOver())
     {
-        int best = -1, bestScore = -1;
-        bool tie = false;
-        for (size_t i = 0; i < state.getPlayers().size(); ++i)
-        {
-            if (state.getPlayers()[i].score > bestScore)
-            {
-                bestScore = state.getPlayers()[i].score;
-                best = (int) i;
-                tie = false;
-            }
-            else if (state.getPlayers()[i].score == bestScore)
-            {
-                tie = true;
-            }
-        }
+        const auto& players = state.getPlayers();
+        int n = (int) players.size();
 
-        float panW = 300.0f, panH = 80.0f;
+        // Rank players by score, highest first; equal scores share a place.
+        std::vector<int> order (n);
+        for (int i = 0; i < n; ++i) order[(size_t) i] = i;
+        std::stable_sort (order.begin(), order.end(),
+                          [&] (int a, int b) { return players[(size_t) a].score
+                                                    > players[(size_t) b].score; });
+
+        std::vector<int> rank ((size_t) n);
+        for (int k = 0; k < n; ++k)
+            rank[(size_t) k] = (k > 0 && players[(size_t) order[(size_t) k]].score
+                                          == players[(size_t) order[(size_t) (k - 1)]].score)
+                                   ? rank[(size_t) (k - 1)] : k + 1;
+
+        const float titleH = 40.0f;
+        const float rowH    = 34.0f;
+        const float panW    = 360.0f;
+        const float panH    = titleH + rowH * (float) n + 24.0f;
+
         juce::Rectangle<float> over { area.getCentreX() - panW * 0.5f,
-                                      area.getCentreY() - panH * 0.5f,
-                                      panW, panH };
-        g.setColour (juce::Colour::fromRGBA (0, 0, 0, 220));
+                                      area.getCentreY() - panH * 0.5f, panW, panH };
+        g.setColour (juce::Colour::fromRGBA (0, 0, 0, 225));
         g.fillRoundedRectangle (over, 12.0f);
         g.setColour (juce::Colours::white);
         g.drawRoundedRectangle (over, 12.0f, 2.0f);
 
-        g.setFont (juce::FontOptions (28.0f, juce::Font::bold));
-        if (tie)
-            g.drawText ("Tie!", over, juce::Justification::centred, false);
-        else if (best >= 0)
+        auto inner = over.reduced (18.0f, 12.0f);
+
+        g.setColour (juce::Colours::white);
+        g.setFont (juce::FontOptions (24.0f, juce::Font::bold));
+        g.drawText ("Final Standings", inner.removeFromTop (titleH),
+                    juce::Justification::centred, false);
+
+        const juce::Colour gold = juce::Colour::fromRGB (255, 205, 60);
+
+        for (int k = 0; k < n; ++k)
         {
-            g.setColour (state.getPlayers()[(size_t) best].colour);
-            g.drawText ("P" + juce::String (best + 1) + " wins!",
-                        over, juce::Justification::centred, false);
+            const auto& p = players[(size_t) order[(size_t) k]];
+            bool winner = rank[(size_t) k] == 1;
+
+            auto row = inner.removeFromTop (rowH);
+
+            if (winner)
+            {
+                g.setColour (gold.withAlpha (0.18f));
+                g.fillRoundedRectangle (row, 5.0f);
+            }
+
+            auto r = row.reduced (4.0f, 0.0f);
+            g.setFont (juce::FontOptions (18.0f, winner ? juce::Font::bold : juce::Font::plain));
+
+            // Place (1 / 2 / 3 …)
+            g.setColour (winner ? gold : juce::Colours::white);
+            g.drawText (juce::String (rank[(size_t) k]) + ".",
+                        r.removeFromLeft (34.0f), juce::Justification::centredLeft, false);
+
+            // Colour swatch
+            auto sw = r.removeFromLeft (24.0f);
+            g.setColour (p.colour);
+            g.fillRoundedRectangle (sw.withSizeKeepingCentre (16.0f, 16.0f), 3.0f);
+
+            // Score (right)
+            g.setColour (winner ? gold : juce::Colours::white);
+            g.drawText (juce::String (p.score),
+                        r.removeFromRight (54.0f), juce::Justification::centredRight, false);
+
+            // "WINNER" tag for first place(s)
+            if (winner)
+            {
+                g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
+                g.setColour (gold);
+                g.drawText ("WINNER", r.removeFromRight (72.0f),
+                            juce::Justification::centredRight, false);
+            }
+
+            // Player label
+            juce::String label = "P" + juce::String (p.slot + 1)
+                               + (p.controllerIndex < 0 ? " (CPU)" : "");
+            g.setColour (juce::Colours::white);
+            g.setFont (juce::FontOptions (18.0f, winner ? juce::Font::bold : juce::Font::plain));
+            g.drawText (label, r, juce::Justification::centredLeft, false);
         }
     }
 }

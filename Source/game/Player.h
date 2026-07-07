@@ -41,6 +41,8 @@ struct AiBrain
                             // defer forever to an idle engine that won't clear
     float backoffTimer = 0.0f;   // reversing to break an engine-vs-engine jam
     int   backoffDir = 0;
+    float bestDistToTarget = 1.0e9f;  // closest we've got to the goal so far
+    int   noProgress = 0;    // rethinks without getting closer (a shoving match)
     int dirSign = 0;        // last commanded travel direction (+1/-1)
     float dirTimer = 0.0f;  // lockout before the direction may flip again
 };

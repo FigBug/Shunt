@@ -24,6 +24,31 @@ namespace
         static juce::Random r;
         return r;
     }
+
+    const char* aiStateName (AiBrain::State s)
+    {
+        switch (s)
+        {
+            case AiBrain::idle:          return "idle";
+            case AiBrain::seekingCar:    return "seek";
+            case AiBrain::returningHome: return "return";
+            case AiBrain::leavingDropOff:return "leave";
+        }
+        return "?";
+    }
+
+    const char* colourName (CarColour c)
+    {
+        switch (c)
+        {
+            case CarColour::red:    return "red";
+            case CarColour::blue:   return "blue";
+            case CarColour::green:  return "green";
+            case CarColour::yellow: return "yellow";
+            case CarColour::count:  break;
+        }
+        return "?";
+    }
 }
 
 GameState::GameState (int numPlayers, int mapIndex)
@@ -51,6 +76,8 @@ GameState::GameState (int numPlayers, int mapIndex)
         spawnAi (i);
 
     placeInitialCars();
+
+    openLog (numPlayers, mapIndex);
 }
 
 GameState::SpawnInfo GameState::spawnPosNearDropOff (int dropOffIndex) const
@@ -96,7 +123,7 @@ void GameState::spawnPlayer (int controllerIndex, int slot)
     p.pos    = spawn.pos;
     p.dir    = spawn.dir;
     p.bodyId = physics.addBody (spawn.pos.segment, spawn.pos.distance,
-                                spawn.dir, kEngineMass, 0.0f);
+                                spawn.dir, kEngineMass, 0.0f, true);
 
     players.push_back (std::move (p));
 }
@@ -114,7 +141,7 @@ void GameState::spawnAi (int slot)
     p.pos    = spawn.pos;
     p.dir    = spawn.dir;
     p.bodyId = physics.addBody (spawn.pos.segment, spawn.pos.distance,
-                                spawn.dir, kEngineMass, 0.0f);
+                                spawn.dir, kEngineMass, 0.0f, true);
 
     p.ai = AiBrain {};
 
@@ -508,6 +535,40 @@ void GameState::update (float dt, gin::GameControllerManager& controllers)
         checkCoupling (p);
         checkScoring (p);
     }
+
+    // Diagnostic log: note discrete events as they happen, and a periodic
+    // snapshot of every train/car and what each AI is doing.
+    logClock += dt;
+    for (const auto& ev : soundEvents)
+    {
+        const char* name = nullptr;
+        switch (ev.type)
+        {
+            case SoundEvent::couple:    name = "COUPLE";    break;
+            case SoundEvent::uncouple:  name = "UNCOUPLE";  break;
+            case SoundEvent::collision: name = "COLLISION"; break;
+            case SoundEvent::score:     name = "SCORE";     break;
+            case SoundEvent::points:    name = "POINTS";    break;
+            case SoundEvent::horn:      break;   // too frequent/noisy to log
+        }
+        if (name != nullptr)
+            logLine ("[t=" + juce::String (logClock, 2) + "] EVENT " + name
+                     + " at (" + juce::String (ev.worldPos.x, 1) + ","
+                     + juce::String (ev.worldPos.y, 1) + ")");
+    }
+
+    logTimer     += dt;
+    logCarsTimer += dt;
+    if (logTimer >= 0.2f)
+    {
+        logTimer = 0.0f;
+        bool includeCars = (logCarsTimer >= 1.0f);
+        if (includeCars) logCarsTimer = 0.0f;
+        logSnapshot (includeCars);
+    }
+
+    if (gameOver)
+        logLine ("[t=" + juce::String (logClock, 2) + "] GAME OVER");
 }
 
 void GameState::handleActions (Player& p, float engineSpeed, bool toggleFwd, bool toggleBack, bool uncouple)
@@ -900,6 +961,128 @@ float GameState::panForWorldX (float worldX) const
     return juce::jlimit (-1.0f, 1.0f, (worldX - centre) / halfW);
 }
 
+// ============================================================================
+// Diagnostic logging
+// ============================================================================
+
+void GameState::openLog (int numPlayers, int mapIndex)
+{
+    auto dir = juce::File::getSpecialLocation (juce::File::userHomeDirectory)
+                 .getChildFile ("Library/Logs/Shunt");
+    dir.createDirectory();
+
+    auto now   = juce::Time::getCurrentTime();
+    auto stamp = now.formatted ("%Y%m%d-%H%M%S")
+               + "-" + juce::String (now.getMilliseconds()).paddedLeft ('0', 3);
+    auto file  = dir.getChildFile ("shunt-" + stamp + ".log");
+
+    logStream = file.createOutputStream();
+    if (logStream == nullptr)
+        return;
+
+    logStream->setPosition (0);
+    logStream->truncate();
+
+    const auto& maps = getMaps();
+    juce::String mapName = (mapIndex >= 0 && mapIndex < (int) maps.size())
+                             ? maps[(size_t) mapIndex].name : juce::String ("default-yard");
+
+    logLine ("=== Shunt game log ===");
+    logLine ("started " + now.toString (true, true));
+    logLine ("map=" + mapName + "  players=" + juce::String (numPlayers)
+             + "  cars=" + juce::String ((int) cars.size()));
+    for (const auto& dz : track.getDropOffs())
+        logLine ("dropoff colour=" + juce::String (dz.colourIndex)
+                 + " node=" + juce::String (dz.node)
+                 + " at=" + track.getNode (dz.node).position.toString());
+    logLine ("columns: P<slot> <colour> <driver>:<aiState> spd=<speed> seg=<segment> d=<dist> dir=<facing>"
+             " pos=(x,y) tgtCar=<id> tgt=(seg/dist) wait=<n> path=<len> stuck=<n> cars=F<n>/R<n>"
+             " lock=<colour|-> score=<n>");
+    logLine ("---");
+}
+
+void GameState::logLine (const juce::String& text)
+{
+    if (logStream == nullptr)
+        return;
+    logStream->writeText (text + juce::newLine, false, false, nullptr);
+    logStream->flush();
+}
+
+void GameState::logSnapshot (bool includeCars)
+{
+    if (logStream == nullptr)
+        return;
+
+    auto t = juce::String (logClock, 2);
+
+    for (const auto& p : players)
+    {
+        auto w = track.worldPos (p.pos);
+        juce::String line;
+        line << "[t=" << t << "] P" << p.slot << " ";
+
+        if (p.ai.has_value())
+        {
+            const auto& b = *p.ai;
+            line << colourName (p.carryColour) << " ai:" << aiStateName (b.state)
+                 << " spd=" << juce::String (p.speed, 1)
+                 << " seg=" << p.pos.segment << " d=" << juce::String (p.pos.distance, 1)
+                 << " dir=" << p.dir
+                 << " pos=(" << juce::String (w.x, 1) << "," << juce::String (w.y, 1) << ")"
+                 << " tgtCar=" << b.targetCarId
+                 << " tgt=" << b.targetPos.segment << "/" << juce::String (b.targetPos.distance, 1)
+                 << " wait=" << b.waitCount << " path=" << (int) b.path.size()
+                 << " stuck=" << b.stuckCount;
+        }
+        else
+        {
+            line << "human spd=" << juce::String (p.speed, 1)
+                 << " seg=" << p.pos.segment << " d=" << juce::String (p.pos.distance, 1)
+                 << " dir=" << p.dir
+                 << " pos=(" << juce::String (w.x, 1) << "," << juce::String (w.y, 1) << ")";
+        }
+
+        line << " cars=F" << (int) p.frontCars.size() << "/R" << (int) p.rearCars.size()
+             << " lock=" << (p.hasColourLock ? colourName (p.carryColour) : "-")
+             << " score=" << p.score;
+
+        // Coupled-car track positions, so a car jumping to another track (e.g.
+        // shoved across a switch by a collision) shows up as a segment that
+        // isn't adjacent to the engine's.
+        if (p.totalCars() > 0)
+        {
+            line << " consist=[";
+            for (int ci = 0; ci < (int) p.frontCars.size(); ++ci)
+            {
+                auto cp = carTrackPos (p, true, ci);
+                line << "F" << cp.segment << "/" << juce::String (cp.distance, 1) << " ";
+            }
+            for (int ci = 0; ci < (int) p.rearCars.size(); ++ci)
+            {
+                auto cp = carTrackPos (p, false, ci);
+                line << "R" << cp.segment << "/" << juce::String (cp.distance, 1) << " ";
+            }
+            line << "]";
+        }
+        logLine (line);
+    }
+
+    if (! includeCars)
+        return;
+
+    juce::String freeCars;
+    int nFree = 0;
+    for (const auto& c : cars)
+    {
+        if (! c.free) continue;
+        ++nFree;
+        freeCars << " #" << c.id << ":" << colourName (c.colour)
+                 << " s" << c.pos.segment << "/" << juce::String (c.pos.distance, 1);
+    }
+    logLine ("[t=" + t + "] CARS free=" + juce::String (nFree) + ":" + freeCars);
+}
+
 float GameState::carAngle (const Player& p, bool front, int index) const
 {
     float dist = (float) (index + 1) * kCarSpacing;
@@ -983,33 +1166,59 @@ float GameState::aiUpdate (Player& p, float dt)
 
     if (rethink)
     {
-        // Stuck detection: if we haven't moved much, pick a new target
         auto curWorld = track.worldPos (p.pos);
+
+        // Immobile: barely moved at all (wedged against a buffer or dead-stopped).
         if (brain.lastPos.getDistanceFrom (curWorld) < 0.5f)
             brain.stuckCount++;
         else
             brain.stuckCount = 0;
         brain.lastPos = curWorld;
 
-        if (brain.stuckCount > 10)
+        // No forward progress: moving, but not getting any closer to the goal —
+        // this is the shoving-match case, where two engines push each other about
+        // yet neither advances. Track the best distance we've reached and count
+        // rethinks that fail to beat it. A big jump means the target changed (or
+        // we were shoved far), so rebaseline instead of counting it.
+        float distToTarget = curWorld.getDistanceFrom (track.worldPos (brain.targetPos));
+        if (distToTarget < brain.bestDistToTarget - 0.5f
+            || distToTarget > brain.bestDistToTarget + 4.0f)
         {
-            // Distinguish a real jam from a slow delivery manoeuvre: only reverse
-            // out if another engine is right on top of us (nose-to-tail deadlock).
-            // Otherwise just drop the target and re-plan.
-            float nearestEngine = 1.0e9f;
-            auto myW = track.worldPos (p.pos);
-            for (const auto& other : players)
-                if (&other != &p)
-                    nearestEngine = std::min (nearestEngine,
-                                              myW.getDistanceFrom (track.worldPos (other.pos)));
+            brain.bestDistToTarget = distToTarget;
+            brain.noProgress = 0;
+        }
+        else
+            brain.noProgress++;
+
+        float nearestEngine = 1.0e9f;
+        for (const auto& other : players)
+            if (&other != &p)
+                nearestEngine = std::min (nearestEngine,
+                                          curWorld.getDistanceFrom (track.worldPos (other.pos)));
+
+        // A jam is either dead-stopped, or shoving another engine without
+        // advancing. Either way, bail on the current plan.
+        bool jammed = brain.stuckCount > 10 || brain.noProgress > 12;
+
+        if (jammed)
+        {
+            // Is another engine actually in our way (nose-to-nose, or sitting on
+            // the route ahead)? If so, yield by reversing out — don't gate this
+            // on a tight distance, since two trains each holding a car measure
+            // several units apart at the engines even while their cars touch.
+            bool blockedOnPath = engineBlocksTarget (p, brain.targetPos);
 
             brain.stuckCount  = 0;
+            brain.noProgress  = 0;
+            brain.bestDistToTarget = 1.0e9f;
             brain.targetCarId = -1;
             brain.path.clear();
 
-            if (nearestEngine < 3.5f)   // wedged against another engine — back off
+            if (nearestEngine < 6.0f || blockedOnPath)
             {
-                brain.backoffTimer = 1.2f;
+                // Stagger the reverse per player so two jammed engines don't back
+                // off in lockstep and immediately re-deadlock.
+                brain.backoffTimer = 1.0f + 0.4f * (float) p.slot;
                 brain.backoffDir   = (brain.dirSign != 0) ? -brain.dirSign : -1;
                 return (float) brain.backoffDir * kTrainSpeed * 0.7f;
             }

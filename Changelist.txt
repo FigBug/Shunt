@@ -1,3 +1,13 @@
+0.0.3:
+- Final standings screen ranks every player from winner to loser
+- New maps: Chicago and New York (removed Mobile)
+- Audio: engine rumble, horn, and couple/uncouple/collision/score cues
+- Scoring streaks reward delivering a whole consist together
+- Smarter AI: reliably delivers, backs off from deadlocks, and no longer
+  fights other engines over the same track
+- Fixed cars jumping to the other track after collisions
+- Engines can no longer overlap each other
+
 0.0.2:
 - Level editor for authoring track, switches, spawns and drop-offs
 - Title-screen map selector; remembers the last-played map

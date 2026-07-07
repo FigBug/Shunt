@@ -74,6 +74,17 @@ private:
     // between the AI and the car it wants — a reason to give up on that car.
     bool  engineBlocksTarget (const Player& seeker, TrackPos target) const;
 
+    // Per-game diagnostic log: train/car positions and AI state, one file per
+    // game under ~/Library/Logs/Shunt. Read it after a play-test to see what the
+    // AI was thinking when something went wrong.
+    void  openLog     (int numPlayers, int mapIndex);
+    void  logLine     (const juce::String& text);
+    void  logSnapshot (bool includeCars);
+    std::unique_ptr<juce::FileOutputStream> logStream;
+    double logClock = 0.0;    // seconds since game start
+    float  logTimer = 0.0f;   // time since the last snapshot
+    float  logCarsTimer = 0.0f;   // time since the last free-car dump
+
     TrackGraph           track;
     PhysicsEngine        physics;
     std::vector<Player>  players;

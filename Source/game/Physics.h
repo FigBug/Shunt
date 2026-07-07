@@ -21,6 +21,7 @@ struct PhysBody
     float radiusBack = 0.8f;  // collision boundary behind pos
     float moved = 0.0f;       // distance travelled during the last step()
     bool active = true;
+    bool isEngine = false;    // a driven train (never couples to another engine)
 };
 
 class PhysicsEngine
@@ -28,7 +29,8 @@ class PhysicsEngine
 public:
     void clear();
 
-    int addBody (int segment, float distance, int dir, float mass, float friction);
+    int addBody (int segment, float distance, int dir, float mass, float friction,
+                 bool isEngine = false);
     void removeBody (int id);
     PhysBody* findBody (int id);
     const PhysBody* findBody (int id) const;
