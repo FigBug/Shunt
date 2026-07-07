@@ -45,6 +45,7 @@ struct AiBrain
     int   noProgress = 0;    // rethinks without getting closer (a shoving match)
     int dirSign = 0;        // last commanded travel direction (+1/-1)
     float dirTimer = 0.0f;  // lockout before the direction may flip again
+    bool wantBoost = false; // AI spends a full boost reserve in bursts
 };
 
 struct Player
@@ -69,13 +70,22 @@ struct Player
 
     int totalCars() const noexcept { return (int) frontCars.size() + (int) rearCars.size(); }
 
-    bool prevToggleFwd  = false;
-    bool prevToggleBack = false;
+    bool prevToggleFwd  = false;   // edge detect for the Y (throw switch) button
     bool prevUncouple   = false;
     bool hornHeld       = false;   // horn button currently held (sustained sound)
     bool recoupleLock       = false;
     float recoupleLockDist  = 0.0f;
     float collisionCooldown = 0.0f;   // gap before this engine can sound a crash again
+    float smokeAccum = 0.0f;          // fractional puffs accrued for smoke spawning
+
+    // The switch this train is lined up to throw (next one in its direction of
+    // travel), for the on-track ring indicator. -1 = none. ringFlippable is true
+    // when it can actually be thrown right now (drawn solid vs. half-alpha).
+    int   ringSwitch = -1;
+    bool  ringFlippable = false;
+
+    float boost = 1.0f;   // 0..1 boost reserve; horn spends it for extra top speed
+    bool  boosting = false;   // spending boost this frame (darker smoke, horn)
 
     std::optional<AiBrain> ai;
 };

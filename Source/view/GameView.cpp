@@ -57,6 +57,43 @@ void GameView::paint (juce::Graphics& g)
     drawSwitches (g, w2s, scale);
     drawCars     (g, w2s, scale);
     drawPlayers  (g, w2s, scale);
+    drawSwitchRings (g, w2s, scale);
+    drawSmoke    (g, w2s, scale);
+}
+
+void GameView::drawSwitchRings (juce::Graphics& g, const juce::AffineTransform& w2s, float s) const
+{
+    const auto& track = state.getTrack();
+
+    // A ring in the owning player's colour around the switch they're lined up
+    // to throw: solid when it can be thrown now, half-alpha when blocked.
+    for (const auto& p : state.getPlayers())
+    {
+        if (p.ringSwitch < 0)
+            continue;
+
+        auto c = track.getNode (p.ringSwitch).position;
+        c.applyTransform (w2s);
+        float r = 0.7f * s;
+        g.setColour (p.colour.withAlpha (p.ringFlippable ? 1.0f : 0.5f));
+        g.drawEllipse (c.x - r, c.y - r, r * 2.0f, r * 2.0f, 0.16f * s);
+    }
+}
+
+void GameView::drawSmoke (juce::Graphics& g, const juce::AffineTransform& w2s, float s) const
+{
+    for (const auto& puff : state.getSmoke())
+    {
+        auto p = puff.pos;
+        p.applyTransform (w2s);
+        float r = puff.radius * s;
+        float a = juce::jlimit (0.0f, 1.0f, puff.alpha) * 0.7f;
+
+        // Sooty grey (darker when the engine was boosting); slightly translucent
+        // so trains and track read through it.
+        g.setColour (juce::Colour::fromFloatRGBA (puff.grey, puff.grey, puff.grey, a));
+        g.fillEllipse (p.x - r, p.y - r, r * 2.0f, r * 2.0f);
+    }
 }
 
 void GameView::drawTrack (juce::Graphics& g, const juce::AffineTransform& w2s, float s) const

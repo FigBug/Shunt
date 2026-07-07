@@ -383,6 +383,80 @@ void PhysicsEngine::step (const TrackGraph& track, float dt)
                 computeEdges (track, j);
             }
         }
+
+        // 5. Junction cross-leg overlap. The forward scan only follows the routed
+        // leg through a switch, so two bodies on *diverging* legs of the same
+        // node — which physically converge at that node — are never compared and
+        // can slide over each other. For every pair on segments sharing a node
+        // that don't route to one another, push each back down its own leg until
+        // their surfaces clear the node.
+        auto surfaceToNode = [&] (const PhysBody& b, int node, int& awayDir) -> float
+        {
+            const auto& s = track.getSegment (b.segment);
+            if (s.nodeA == node)
+            {
+                awayDir = 1;   // increasing distance moves away from nodeA
+                return b.distance - ((b.dir > 0) ? b.radiusBack : b.radiusFwd);
+            }
+            if (s.nodeB == node)
+            {
+                awayDir = -1;
+                return (s.length - b.distance) - ((b.dir > 0) ? b.radiusFwd : b.radiusBack);
+            }
+            awayDir = 0;
+            return 1.0e9f;
+        };
+
+        for (size_t i = 0; i < bodies.size(); ++i)
+        {
+            if (! bodies[i].active) continue;
+            for (size_t j = i + 1; j < bodies.size(); ++j)
+            {
+                if (! bodies[j].active) continue;
+                if (bodies[i].segment == bodies[j].segment) continue;   // handled by step 4
+
+                const auto& si = track.getSegment (bodies[i].segment);
+                const auto& sj = track.getSegment (bodies[j].segment);
+                int node = -1;
+                if      (si.nodeA == sj.nodeA || si.nodeA == sj.nodeB) node = si.nodeA;
+                else if (si.nodeB == sj.nodeA || si.nodeB == sj.nodeB) node = si.nodeB;
+                if (node < 0) continue;
+
+                // On the same continuous route (stem<->routed leg, crossing pair,
+                // or a plain through-node)? Then the normal scan and coupling
+                // already handle them — only separate genuinely diverging legs.
+                if (track.routeThrough (bodies[i].segment, node) == (int) bodies[j].segment
+                 || track.routeThrough (bodies[j].segment, node) == (int) bodies[i].segment)
+                    continue;
+
+                int awayI = 0, awayJ = 0;
+                float surfI = surfaceToNode (bodies[i], node, awayI);
+                float surfJ = surfaceToNode (bodies[j], node, awayJ);
+                float overlap = -(surfI + surfJ);
+                if (overlap <= 0.0f || awayI == 0 || awayJ == 0) continue;
+
+                // Push the free car off a fouled junction rather than nudging the
+                // driven engine; between like bodies, split the push.
+                bool iEng = bodies[i].isEngine, jEng = bodies[j].isEngine;
+                float pI = (iEng && ! jEng) ? 0.0f : (jEng && ! iEng) ? overlap : overlap * 0.5f;
+                float pJ = (jEng && ! iEng) ? 0.0f : (iEng && ! jEng) ? overlap : overlap * 0.5f;
+                pI = std::min (pI, 0.15f);
+                pJ = std::min (pJ, 0.15f);
+
+                if (pI > 0.0f)
+                {
+                    auto r = track.advance ({ bodies[i].segment, bodies[i].distance }, awayI, pI);
+                    bodies[i].segment = r.pos.segment; bodies[i].distance = r.pos.distance;
+                    computeEdges (track, i);
+                }
+                if (pJ > 0.0f)
+                {
+                    auto r = track.advance ({ bodies[j].segment, bodies[j].distance }, awayJ, pJ);
+                    bodies[j].segment = r.pos.segment; bodies[j].distance = r.pos.distance;
+                    computeEdges (track, j);
+                }
+            }
+        }
     }
 
     bodies.erase (std::remove_if (bodies.begin(), bodies.end(),

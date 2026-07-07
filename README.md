@@ -18,10 +18,13 @@ Game controllers (Xbox-style naming):
 | Input | Action |
 |---|---|
 | Left stick ↑/↓ or D-pad ↑/↓ | Throttle forward / reverse |
-| Y | Toggle the switch ahead |
-| A | Toggle the switch behind |
+| Y | Throw the switch you're lined up on (the ringed one) |
 | B | Decouple all cars |
 | X | Horn |
+
+The next switch in your direction of travel is highlighted with a ring in your
+colour — solid when you can throw it, faded when it's blocked. If two engines
+approach the same switch, only the closer one gets the ring and may throw it.
 
 On the title screen: LB/RB (or ←/→) change the player count, +/− adjusts
 volume, and any other button starts the game.

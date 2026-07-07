@@ -39,6 +39,7 @@ private:
     bool                                    endScreenReady = false;
     int                                     savedNumPlayers = 2;
     int                                     savedMapIndex   = 0;
+    float                                   savedVolume     = 0.8f;
     std::unique_ptr<juce::PropertiesFile>   settings;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)

@@ -14,11 +14,14 @@ MainComponent::MainComponent()
     settings = std::make_unique<juce::PropertiesFile> (opts);
 
     savedMapIndex = settings->getIntValue ("mapIndex", 0);   // remembered from last session
+    savedVolume   = settings->getIntValue ("volume", 80) / 100.0f;   // stored as a percentage
 
     if (auto* m = std::getenv ("SHUNT_MAP"))   // dev hook: preselect a map for testing
         savedMapIndex = juce::String (m).getIntValue();
 
-    titleScreen = std::make_unique<view::TitleScreen> (controllers, savedNumPlayers, 1.0f, savedMapIndex);
+    soundEngine.setVolume (savedVolume);
+
+    titleScreen = std::make_unique<view::TitleScreen> (controllers, savedNumPlayers, savedVolume, savedMapIndex);
     addAndMakeVisible (*titleScreen);
 
     setWantsKeyboardFocus (true);
@@ -36,10 +39,13 @@ void MainComponent::startGame()
     int numPlayers = titleScreen->getNumPlayers();
     savedNumPlayers = numPlayers;
     savedMapIndex = titleScreen->getMapIndex();
+    savedVolume   = titleScreen->getVolume();
+    soundEngine.setVolume (savedVolume);
 
-    if (settings != nullptr)   // remember the chosen map for next launch
+    if (settings != nullptr)   // remember the chosen map and volume for next launch
     {
         settings->setValue ("mapIndex", savedMapIndex);
+        settings->setValue ("volume", juce::roundToInt (savedVolume * 100.0f));
         settings->saveIfNeeded();
     }
 
@@ -136,6 +142,20 @@ void MainComponent::timerCallback()
         titleScreen->update();
         titleScreen->repaint();
 
+        // Live-apply the menu's volume, and persist it whenever it changes so
+        // the setting survives between runs (and quitting from the menu).
+        float v = titleScreen->getVolume();
+        soundEngine.setVolume (v);
+        if (v != savedVolume)
+        {
+            savedVolume = v;
+            if (settings != nullptr)
+            {
+                settings->setValue ("volume", juce::roundToInt (v * 100.0f));
+                settings->saveIfNeeded();
+            }
+        }
+
         if (titleScreen->isExitPressed())
         {
             juce::JUCEApplication::getInstance()->systemRequestedQuit();
@@ -219,7 +239,7 @@ void MainComponent::returnToTitle()
     hud.reset();
     state.reset();
 
-    titleScreen = std::make_unique<view::TitleScreen> (controllers, savedNumPlayers, 1.0f, savedMapIndex);
+    titleScreen = std::make_unique<view::TitleScreen> (controllers, savedNumPlayers, savedVolume, savedMapIndex);
     addAndMakeVisible (*titleScreen);
     resized();
     grabKeyboardFocus();

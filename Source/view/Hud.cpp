@@ -14,8 +14,9 @@ void Hud::paint (juce::Graphics& g)
 {
     const auto area = getLocalBounds().toFloat();
     const float pad = 8.0f;
-    constexpr float barH = 28.0f;
-    constexpr float swatch = 14.0f;
+    constexpr float barH = 46.0f;
+    constexpr float swatch = 16.0f;
+    constexpr float cellW = 128.0f;
 
     int numP = (int) state.getPlayers().size();
     int freeCars = 0;
@@ -27,29 +28,35 @@ void Hud::paint (juce::Graphics& g)
 
     float barW = area.getWidth() - pad * 2;
     juce::Rectangle<float> bar { pad, pad, barW, barH };
-    g.setColour (juce::Colour::fromRGBA (0, 0, 0, 160));
+    g.setColour (juce::Colour::fromRGBA (0, 0, 0, 170));
     g.fillRoundedRectangle (bar, 6.0f);
 
-    float x = bar.getX() + pad;
-    float cy = bar.getCentreY();
-
+    // One cell per player: swatch + label/score on top, a red boost bar beneath.
+    auto cells = bar.reduced (pad, 6.0f);
     for (int i = 0; i < numP; ++i)
     {
         const auto& p = state.getPlayers()[(size_t) i];
+        auto cell = cells.removeFromLeft (cellW);
 
+        auto top = cell.removeFromTop (18.0f);
+        auto sw  = top.removeFromLeft (swatch);
         g.setColour (p.colour);
-        g.fillRoundedRectangle (x, cy - swatch * 0.5f, swatch, swatch, 3.0f);
-        x += swatch + 4.0f;
+        g.fillRoundedRectangle (sw.withSizeKeepingCentre (swatch, swatch), 3.0f);
 
-        g.setFont (juce::FontOptions (14.0f, juce::Font::bold));
+        top.removeFromLeft (6.0f);
         g.setColour (juce::Colours::white);
+        g.setFont (juce::FontOptions (15.0f, juce::Font::bold));
         juce::String label = (p.controllerIndex >= 0)
-            ? ("P" + juce::String (p.slot + 1))
-            : "AI";
-        g.drawText (label + ": " + juce::String (p.score),
-                    (int) x, (int) bar.getY(), 70, (int) barH,
-                    juce::Justification::centredLeft);
-        x += 74.0f;
+            ? ("P" + juce::String (p.slot + 1)) : "AI";
+        g.drawText (label + ":  " + juce::String (p.score), top, juce::Justification::centredLeft);
+
+        cell.removeFromTop (3.0f);
+        auto track = cell.removeFromTop (7.0f).withTrimmedRight (10.0f);
+        g.setColour (juce::Colour::fromRGBA (70, 15, 15, 230));
+        g.fillRoundedRectangle (track, 2.5f);
+        auto fill = track.withWidth (track.getWidth() * juce::jlimit (0.0f, 1.0f, p.boost));
+        g.setColour (juce::Colour::fromRGB (235, 45, 45));
+        g.fillRoundedRectangle (fill, 2.5f);
     }
 
     g.setFont (juce::FontOptions (14.0f));

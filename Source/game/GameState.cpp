@@ -77,6 +77,15 @@ GameState::GameState (int numPlayers, int mapIndex)
 
     placeInitialCars();
 
+    // Seed the wind: a random heading at a random strength above the minimum.
+    {
+        float a = rng().nextFloat() * juce::MathConstants<float>::twoPi;
+        float s = kWindMinStrength + rng().nextFloat() * (1.0f - kWindMinStrength);
+        wind = { std::cos (a) * s, std::sin (a) * s };
+        targetWind = wind;
+        windChangeTimer = kWindChangeInterval;
+    }
+
     openLog (numPlayers, mapIndex);
 }
 
@@ -381,13 +390,17 @@ void GameState::update (float dt, gin::GameControllerManager& controllers)
     for (auto& sw : track.getSwitches())
         sw.cooldown = juce::jmax (0.0f, sw.cooldown - dt);
 
+    // Work out each train's lined-up switch and ownership before input/AI, so a
+    // Y press (and the AI) act on this frame's ring.
+    updateSwitchTargets();
+
     using B = gin::GameController::Button;
     using A = gin::GameController::Axis;
 
     for (auto& p : players)
     {
         float speed = 0.0f;
-        bool toggleFwdEdge = false, toggleBackEdge = false, uncoupleEdge = false;
+        bool flipEdge = false, uncoupleEdge = false;
         p.hornHeld = false;   // cleared unless a held horn button says otherwise
 
         if (p.ai.has_value())
@@ -407,21 +420,47 @@ void GameState::update (float dt, gin::GameControllerManager& controllers)
 
                 speed = throttle * kTrainSpeed;
 
-                bool toggleFwd  = c->isButtonDown (B::faceUp);      // Y = switch ahead
-                bool toggleBack = c->isButtonDown (B::faceDown);    // A = switch behind
-                bool uncouple   = c->isButtonDown (B::faceRight);   // B = uncouple
-                bool horn       = c->isButtonDown (B::faceLeft);    // X = horn
+                bool flipBtn  = c->isButtonDown (B::faceUp);      // Y = throw lined-up switch
+                bool uncouple = c->isButtonDown (B::faceRight);   // B = uncouple
+                bool horn     = c->isButtonDown (B::faceLeft);    // X = horn
 
-                toggleFwdEdge  = toggleFwd  && ! p.prevToggleFwd;
-                toggleBackEdge = toggleBack && ! p.prevToggleBack;
-                uncoupleEdge   = uncouple   && ! p.prevUncouple;
-                p.prevToggleFwd  = toggleFwd;
-                p.prevToggleBack = toggleBack;
-                p.prevUncouple   = uncouple;
+                flipEdge     = flipBtn  && ! p.prevToggleFwd;
+                uncoupleEdge = uncouple && ! p.prevUncouple;
+                p.prevToggleFwd = flipBtn;
+                p.prevUncouple  = uncouple;
 
                 p.hornHeld = horn;   // sustained: sound layer loops while held
             }
         }
+
+        // Boost: the horn (players) or an AI burst spends the reserve for a
+        // higher top speed. While boosting, the target speed is 1.5x; when it
+        // stops, the target drops back and the ramp eases the train down — it
+        // never snaps to the normal max.
+        bool wantBoost;
+        if (p.ai.has_value())
+        {
+            auto& brain = *p.ai;
+            if (p.boost >= 1.0f) brain.wantBoost = true;    // charged — spend it
+            if (p.boost <= 0.0f) brain.wantBoost = false;   // empty — recharge
+            wantBoost = brain.wantBoost && std::abs (speed) > 0.1f;
+        }
+        else
+        {
+            wantBoost = p.hornHeld;
+        }
+
+        bool boosting = wantBoost && p.boost > 0.0f;
+        p.boost = boosting ? juce::jmax (0.0f, p.boost - dt / kBoostEmptyTime)
+                           : juce::jmin (1.0f, p.boost + dt / kBoostFillTime);
+        p.boosting = boosting;   // for darker smoke + the AI's horn
+        if (boosting)
+            speed *= kBoostSpeedMult;
+
+        // The horn and the boost are the same button, so an engine sounds its
+        // horn while boosting — including the AI, which has no button input.
+        if (p.ai.has_value())
+            p.hornHeld = boosting;
 
         // The throttle sets a *target* speed; the engine ramps toward it. The
         // collision boundary extends over the coupled cars on each side.
@@ -437,9 +476,11 @@ void GameState::update (float dt, gin::GameControllerManager& controllers)
             // current motion. Acceleration = force / mass, so a heavy consist
             // changes speed slowly.
             float cur  = b->speed;
-            bool coasting  = (speed == 0.0f);
-            bool reversing = (speed != 0.0f && cur != 0.0f && (speed > 0.0f) != (cur > 0.0f));
-            float force = coasting ? kCoastForce : (reversing ? kBrakeForce : kEngineForce);
+            bool reversing  = (speed != 0.0f && cur != 0.0f && (speed > 0.0f) != (cur > 0.0f));
+            // Easing down covers coasting to a stop AND drifting from the boosted
+            // top speed back to normal — both shed speed gently, no snap.
+            bool easingDown = ! reversing && std::abs (cur) > std::abs (speed) + 1.0e-4f;
+            float force = reversing ? kBrakeForce : (easingDown ? kCoastForce : kEngineForce);
 
             float maxDv = force / b->mass * dt;
             b->speed = cur + juce::jlimit (-maxDv, maxDv, speed - cur);
@@ -448,7 +489,7 @@ void GameState::update (float dt, gin::GameControllerManager& controllers)
 
         // Decoupled cars inherit the engine's actual speed, so resolve actions
         // after the ramp.
-        handleActions (p, actualSpeed, toggleFwdEdge, toggleBackEdge, uncoupleEdge);
+        handleActions (p, actualSpeed, flipEdge, uncoupleEdge);
     }
 
     physics.step (track, dt);
@@ -545,6 +586,8 @@ void GameState::update (float dt, gin::GameControllerManager& controllers)
         checkScoring (p);
     }
 
+    updateWeather (dt);
+
     // Diagnostic log: note discrete events as they happen, and a periodic
     // snapshot of every train/car and what each AI is doing.
     logClock += dt;
@@ -580,35 +623,12 @@ void GameState::update (float dt, gin::GameControllerManager& controllers)
         logLine ("[t=" + juce::String (logClock, 2) + "] GAME OVER");
 }
 
-void GameState::handleActions (Player& p, float engineSpeed, bool toggleFwd, bool toggleBack, bool uncouple)
+void GameState::handleActions (Player& p, float engineSpeed, bool flip, bool uncouple)
 {
-    auto tryToggle = [&] (int searchDir)
-    {
-        // Search from the end of the consist in that direction
-        int numCars = (searchDir == p.dir) ? (int) p.frontCars.size()
-                                           : (int) p.rearCars.size();
-        float offset = (float) numCars * kCarSpacing;
-        auto endPos = track.advance (p.pos, searchDir, offset);
-        auto switchNode = track.nextSwitchAhead (endPos.pos, endPos.dir);
-
-        if (switchNode.has_value())
-        {
-            if (auto* sw = track.findSwitch (*switchNode))
-            {
-                if (sw->cooldown <= 0.0f && ! isSwitchOccupied (*switchNode)
-                    && ! isSwitchBlockedByCloserTrain (p, *switchNode))
-                {
-                    sw->reversed = ! sw->reversed;
-                    sw->cooldown = 0.5f;
-                    soundEvents.push_back ({ SoundEvent::points,
-                                             track.getNode (sw->node).position });
-                }
-            }
-        }
-    };
-
-    if (toggleFwd)  tryToggle (p.dir);
-    if (toggleBack) tryToggle (-p.dir);
+    // Y throws the switch this train is lined up on — the next one ahead in its
+    // direction of travel — but only when it owns it and it can be thrown.
+    if (flip && p.ringSwitch >= 0 && p.ringFlippable)
+        flipSwitch (p.ringSwitch);
 
     if (uncouple && p.totalCars() > 0)
         decoupleAll (p, engineSpeed);
@@ -778,6 +798,72 @@ void GameState::checkScoring (Player& p)
     }
 }
 
+void GameState::updateWeather (float dt)
+{
+    // --- Wind: drift toward a fresh random target every so often. ---
+    windChangeTimer -= dt;
+    if (windChangeTimer <= 0.0f)
+    {
+        float curAngle = std::atan2 (wind.y, wind.x);
+        float newAngle = curAngle + (rng().nextFloat() - 0.5f) * kWindAngleChangeMax * 2.0f;
+        float newStr   = juce::jlimit (kWindMinStrength, 1.0f,
+                                       wind.getDistanceFromOrigin()
+                                       + (rng().nextFloat() - 0.5f) * kWindStrengthChangeMax);
+        targetWind = { std::cos (newAngle) * newStr, std::sin (newAngle) * newStr };
+        windChangeTimer = kWindChangeInterval;
+    }
+    wind += (targetWind - wind) * (kWindLerpSpeed * dt);
+
+    // --- Smoke: each engine puffs from its stack; puffs fade, grow and drift. ---
+    for (auto& p : players)
+    {
+        float speed01 = juce::jmin (1.0f, std::abs (p.speed) / kEngineTopSpeed);
+        p.smokeAccum += (kSmokeIdleRate + speed01 * kSmokeSpeedRate) * dt;
+
+        while (p.smokeAccum >= 1.0f && (int) smoke.size() < kSmokeMaxPuffs)
+        {
+            p.smokeAccum -= 1.0f;
+
+            auto ew = track.worldPos (p.pos);
+            float ang = track.trackAngle (p.pos, p.dir);
+            juce::Point<float> at { ew.x + std::cos (ang) * kSmokeStackOffset
+                                       + (rng().nextFloat() - 0.5f) * 0.12f,
+                                    ew.y + std::sin (ang) * kSmokeStackOffset
+                                       + (rng().nextFloat() - 0.5f) * 0.12f };
+
+            SmokePuff s;
+            s.pos      = at;
+            s.radius   = kSmokeBaseRadius + rng().nextFloat() * kSmokeRadiusRand;
+            s.alpha    = kSmokeBaseAlpha;
+            float life = kSmokeFadeMin + rng().nextFloat() * (kSmokeFadeMax - kSmokeFadeMin);
+            s.fadeRate = 1.0f / life;
+            s.windAngleOffset = (rng().nextFloat() - 0.5f) * kSmokeWindAngleVariation;
+            s.grey = p.boosting ? 0.16f : 0.42f;   // boosting engines belch darker smoke
+            smoke.push_back (s);
+        }
+        p.smokeAccum = juce::jmin (p.smokeAccum, 1.0f);   // don't burst after a hitch
+    }
+
+    for (auto it = smoke.begin(); it != smoke.end();)
+    {
+        it->alpha  -= it->fadeRate * dt;
+        it->radius += kSmokeGrowth * dt;
+
+        // Disperse: rotate the wind by this puff's fixed offset so the plume
+        // spreads instead of sliding as one rigid blob.
+        float c  = std::cos (it->windAngleOffset);
+        float sn = std::sin (it->windAngleOffset);
+        juce::Point<float> drift { wind.x * c - wind.y * sn,
+                                   wind.x * sn + wind.y * c };
+        it->pos += drift * (kSmokeWindStrength * dt);
+
+        if (it->alpha <= 0.0f)
+            it = smoke.erase (it);
+        else
+            ++it;
+    }
+}
+
 bool GameState::trainFoulsSwitch (const Player& p, int switchNode) const
 {
     auto nodePos = track.getNode (switchNode).position;
@@ -828,28 +914,65 @@ bool GameState::isSwitchOccupied (int switchNode) const
     return false;
 }
 
-bool GameState::isSwitchBlockedByCloserTrain (const Player& mover, int switchNode) const
+GameState::SwitchTarget GameState::nextSwitchInTravel (const Player& p) const
 {
-    const auto& seg = track.getSegment (mover.pos.segment);
+    // Direction the leading end is actually moving (default to facing when
+    // stopped). The next switch reached that way is the one lined up to throw.
+    int travelDir = (p.speed < 0.0f) ? -p.dir : p.dir;
+    int numLead   = (travelDir == p.dir) ? (int) p.frontCars.size()
+                                         : (int) p.rearCars.size();
+    auto endPos = track.advance (p.pos, travelDir, (float) numLead * kCarSpacing);
 
-    // Only applies when the switch sits at an end of the mover's own segment.
-    float switchDist;
-    if (seg.nodeA == switchNode)      switchDist = 0.0f;
-    else if (seg.nodeB == switchNode) switchDist = seg.length;
-    else return false;
+    auto node = track.nextSwitchAhead (endPos.pos, endPos.dir);
+    if (! node.has_value())
+        return {};
 
-    float myDist = std::abs (mover.pos.distance - switchDist);
+    float d = track.worldPos (endPos.pos).getDistanceFrom (track.getNode (*node).position);
+    return { *node, d };
+}
 
-    for (const auto& other : players)
+void GameState::updateSwitchTargets()
+{
+    std::vector<SwitchTarget> tgt (players.size());
+    for (size_t i = 0; i < players.size(); ++i)
+        tgt[i] = nextSwitchInTravel (players[(size_t) i]);
+
+    for (size_t i = 0; i < players.size(); ++i)
     {
-        if (&other == &mover) continue;
-        if (other.pos.segment != mover.pos.segment) continue;
+        auto& p = players[i];
+        p.ringSwitch = -1;
+        p.ringFlippable = false;
 
-        if (std::abs (other.pos.distance - switchDist) < myDist)
-            return true;
+        int node = tgt[i].node;
+        if (node < 0)
+            continue;
+
+        // A contested switch belongs to the closest train (ties: lower slot);
+        // farther trains get no ring and can't throw it.
+        bool owned = true;
+        for (size_t j = 0; j < players.size(); ++j)
+        {
+            if (j == i || tgt[j].node != node) continue;
+            if (tgt[j].dist < tgt[i].dist || (tgt[j].dist == tgt[i].dist && j < i))
+                { owned = false; break; }
+        }
+        if (! owned)
+            continue;
+
+        p.ringSwitch = node;
+        const auto* sw = track.findSwitch (node);
+        p.ringFlippable = (sw != nullptr && sw->cooldown <= 0.0f && ! isSwitchOccupied (node));
     }
+}
 
-    return false;
+void GameState::flipSwitch (int switchNode)
+{
+    if (auto* sw = track.findSwitch (switchNode))
+    {
+        sw->reversed = ! sw->reversed;
+        sw->cooldown = 0.5f;
+        soundEvents.push_back ({ SoundEvent::points, track.getNode (sw->node).position });
+    }
 }
 
 bool GameState::otherEngineInWindow (const Player& seeker, int segment, float lo, float hi) const
@@ -1167,13 +1290,13 @@ float GameState::aiUpdate (Player& p, float dt)
         return kTrainSpeed * 0.7f;
     }
 
-    // Backing off to break a jam (usually against another engine): reverse for a
-    // moment, then re-path and re-target from the new spot.
+    // Backing off to break a jam (usually against another engine): ease back
+    // gently — a slow reverse, not a full-speed recoil — then re-path.
     if (brain.backoffTimer > 0.0f)
     {
         brain.backoffTimer -= dt;
         if (brain.backoffTimer > 0.0f)
-            return (float) brain.backoffDir * kTrainSpeed * 0.7f;
+            return (float) brain.backoffDir * kTrainSpeed * kBackoffSpeed;
 
         brain.path.clear();
         brain.targetCarId = -1;
@@ -1236,7 +1359,7 @@ float GameState::aiUpdate (Player& p, float dt)
                 // off in lockstep and immediately re-deadlock.
                 brain.backoffTimer = 1.0f + 0.4f * (float) p.slot;
                 brain.backoffDir   = (brain.dirSign != 0) ? -brain.dirSign : -1;
-                return (float) brain.backoffDir * kTrainSpeed * 0.7f;
+                return (float) brain.backoffDir * kTrainSpeed * kBackoffSpeed;
             }
         }
     }
@@ -1437,8 +1560,9 @@ float GameState::aiUpdate (Player& p, float dt)
 
             // This is the next switch on the route. Whether or not we manage
             // to throw it, stop here: the AI can't reach past it to switches
-            // further along.
-            if (canToggleSwitch (sharedNode) && ! isSwitchBlockedByCloserTrain (p, sharedNode))
+            // further along. It may only throw the switch it's lined up on (its
+            // ring) and owns — same rule the players play by.
+            if (sharedNode == p.ringSwitch && p.ringFlippable)
             {
                 int currentRoute = -1;
                 if (segA == sw->stemSegment)
