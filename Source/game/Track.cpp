@@ -151,6 +151,13 @@ juce::Point<float> TrackGraph::worldPos (TrackPos pos) const
     return a + (b - a) * t;
 }
 
+void TrackGraph::worldXY (TrackPos pos, float& x, float& y) const
+{
+    auto w = worldPos (pos);
+    x = w.x;
+    y = w.y;
+}
+
 float TrackGraph::trackAngle (TrackPos pos, int dir) const
 {
     const auto& seg = segments[(size_t) pos.segment];
