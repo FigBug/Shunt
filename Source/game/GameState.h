@@ -93,7 +93,6 @@ private:
     std::vector<int>     spawnDropOffOrder;
     int                  nextCarId   = 0;
     bool                 gameOver    = false;
-    float                collisionCooldown = 0.0f;   // rate-limits collision cues
 
     static constexpr float kTrainSpeed    = kEngineTopSpeed;
     static constexpr float kCarSpacing    = 1.6f;

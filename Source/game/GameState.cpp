@@ -453,22 +453,31 @@ void GameState::update (float dt, gin::GameControllerManager& controllers)
 
     physics.step (track, dt);
 
-    // Collision cue: fire on the hardest fresh impact, rate-limited so a single
-    // crash (resolved over several sub-steps) doesn't machine-gun the sound.
-    collisionCooldown = juce::jmax (0.0f, collisionCooldown - dt);
-    if (collisionCooldown <= 0.0f)
-    {
-        constexpr float kCollisionSpeed = 2.5f;   // closing speed to count as a crash
-        const PhysicsEngine::Contact* hardest = nullptr;
-        for (const auto& ct : physics.getContacts())
-            if (ct.speed > kCollisionSpeed && (hardest == nullptr || ct.speed > hardest->speed))
-                hardest = &ct;
+    // Collision cue: attribute each impact to the nearest engine and let each
+    // engine sound at most once every 2s, so a grind or a multi-substep crash
+    // doesn't machine-gun the sound.
+    for (auto& p : players)
+        p.collisionCooldown = juce::jmax (0.0f, p.collisionCooldown - dt);
 
-        if (hardest != nullptr)
+    constexpr float kCollisionSpeed = 2.5f;   // closing speed to count as a crash
+    for (const auto& ct : physics.getContacts())
+    {
+        if (ct.speed <= kCollisionSpeed) continue;
+
+        auto cw = track.worldPos ({ ct.segment, ct.distance });
+
+        Player* nearest = nullptr;
+        float best = 1.0e9f;
+        for (auto& p : players)
         {
-            soundEvents.push_back ({ SoundEvent::collision,
-                                     track.worldPos ({ hardest->segment, hardest->distance }) });
-            collisionCooldown = 0.15f;
+            float d = track.worldPos (p.pos).getDistanceFrom (cw);
+            if (d < best) { best = d; nearest = &p; }
+        }
+
+        if (nearest != nullptr && nearest->collisionCooldown <= 0.0f)
+        {
+            soundEvents.push_back ({ SoundEvent::collision, cw });
+            nearest->collisionCooldown = 2.0f;
         }
     }
 
@@ -649,10 +658,12 @@ void GameState::checkCoupling (Player& p)
     if (p.recoupleLock)
         return;
 
-    auto nextFrontSlot = track.worldPos (
-        track.advance (p.pos, p.dir, (float) (p.frontCars.size() + 1) * kCarSpacing).pos);
-    auto nextRearSlot = track.worldPos (
-        track.advance (p.pos, -p.dir, (float) (p.rearCars.size() + 1) * kCarSpacing).pos);
+    // The coupling slot is found by advancing along the track through switches,
+    // so it lands on the routed branch. Coupling additionally requires the car
+    // to be on that same segment, so an engine can't grab a car sitting on the
+    // *other* branch of a switch just because it's close in world space.
+    auto frontSlot = track.advance (p.pos,  p.dir, (float) (p.frontCars.size() + 1) * kCarSpacing).pos;
+    auto rearSlot  = track.advance (p.pos, -p.dir, (float) (p.rearCars.size()  + 1) * kCarSpacing).pos;
 
     for (auto& c : cars)
     {
@@ -662,8 +673,10 @@ void GameState::checkCoupling (Player& p)
             continue;
 
         auto carWorld = track.worldPos (c.pos);
-        float df = nextFrontSlot.getDistanceFrom (carWorld);
-        float dr = nextRearSlot.getDistanceFrom (carWorld);
+        float df = (c.pos.segment == frontSlot.segment)
+                     ? track.worldPos (frontSlot).getDistanceFrom (carWorld) : 1.0e9f;
+        float dr = (c.pos.segment == rearSlot.segment)
+                     ? track.worldPos (rearSlot).getDistanceFrom (carWorld) : 1.0e9f;
 
         if (df < kCoupleDistance || dr < kCoupleDistance)
         {
@@ -685,10 +698,8 @@ void GameState::checkCoupling (Player& p)
 
             soundEvents.push_back ({ SoundEvent::couple, carWorld });
 
-            nextFrontSlot = track.worldPos (
-                track.advance (p.pos, p.dir, (float) (p.frontCars.size() + 1) * kCarSpacing).pos);
-            nextRearSlot = track.worldPos (
-                track.advance (p.pos, -p.dir, (float) (p.rearCars.size() + 1) * kCarSpacing).pos);
+            frontSlot = track.advance (p.pos,  p.dir, (float) (p.frontCars.size() + 1) * kCarSpacing).pos;
+            rearSlot  = track.advance (p.pos, -p.dir, (float) (p.rearCars.size()  + 1) * kCarSpacing).pos;
 
             if (p.totalCars() >= kMaxConsist)
                 return;
@@ -733,10 +744,15 @@ void GameState::checkScoring (Player& p)
                     // Cars delivered back-to-back (a whole consist arriving
                     // together) build a streak, so the Nth car in a run is worth
                     // N points — bigger shipments score progressively more.
+                    bool firstOfShipment = (p.deliveryStreak == 0);
                     p.deliveryStreak++;
                     p.deliveryTimer = kDeliveryStreakWindow;
                     p.score += p.deliveryStreak;
-                    soundEvents.push_back ({ SoundEvent::score, dzPos });
+
+                    // Only sound the score cue once per shipment — not once for
+                    // every car in the same consist arriving together.
+                    if (firstOfShipment)
+                        soundEvents.push_back ({ SoundEvent::score, dzPos });
                     return true;
                 }
             }

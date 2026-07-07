@@ -350,26 +350,27 @@ void PhysicsEngine::step (const TrackGraph& track, float dt)
             resolve (edges[i].back, -edges[i].back.velDir, b.dir);
         }
 
-        // 4. Engine-vs-engine overlap. Two driven trains never couple, so they
-        // must never share a spot. The edge-scan above misses the case where two
-        // engines meet head-on at a junction and stack (their consists point the
-        // same way, so neither scans toward the other's centre). Push any pair
-        // whose centres are on the same segment and closer than a car-length
-        // straight apart along the rail — this can't fire during coupling, which
-        // is engine-to-free-car, not engine-to-engine.
-        constexpr float kEngineMinGap = 0.8f;
+        // 4. Same-kind overlap. Two engines (which never couple) or two free
+        // cars must never share a spot. The edge-scan above misses the case
+        // where bodies stack at a junction with their extents pointing the same
+        // way, so neither scans toward the other's centre. Push apart any two
+        // same-kind bodies whose centres sit on the same segment closer than a
+        // car-length. Engine-vs-car pairs are skipped so this never fights
+        // coupling (which pulls a free car right up to the engine).
+        constexpr float kOverlapGap = 0.8f;
         for (size_t i = 0; i < bodies.size(); ++i)
         {
-            if (! bodies[i].active || ! bodies[i].isEngine) continue;
+            if (! bodies[i].active) continue;
             for (size_t j = i + 1; j < bodies.size(); ++j)
             {
-                if (! bodies[j].active || ! bodies[j].isEngine) continue;
+                if (! bodies[j].active) continue;
+                if (bodies[i].isEngine != bodies[j].isEngine) continue;   // coupling pair
                 if (bodies[i].segment != bodies[j].segment) continue;
 
                 float gap = bodies[j].distance - bodies[i].distance;
-                if (std::abs (gap) >= kEngineMinGap) continue;
+                if (std::abs (gap) >= kOverlapGap) continue;
 
-                float push = std::min (0.15f, (kEngineMinGap - std::abs (gap)) * 0.5f);
+                float push = std::min (0.15f, (kOverlapGap - std::abs (gap)) * 0.5f);
                 int iDir = (gap >= 0.0f) ? -1 : 1;   // i retreats away from j (ties: i down, j up)
 
                 auto ri = track.advance ({ bodies[i].segment, bodies[i].distance }, iDir, push);

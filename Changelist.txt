@@ -1,3 +1,9 @@
+0.0.4:
+- Free cars no longer pile up on the same spot
+- Score sound plays once per shipment instead of once per car
+- Collision sound has a 2-second cooldown per engine
+- Engines no longer couple a car sitting on the other branch of a switch
+
 0.0.3:
 - Final standings screen ranks every player from winner to loser
 - New maps: Chicago and New York (removed Mobile)

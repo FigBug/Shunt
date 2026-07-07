@@ -75,6 +75,7 @@ struct Player
     bool hornHeld       = false;   // horn button currently held (sustained sound)
     bool recoupleLock       = false;
     float recoupleLockDist  = 0.0f;
+    float collisionCooldown = 0.0f;   // gap before this engine can sound a crash again
 
     std::optional<AiBrain> ai;
 };
