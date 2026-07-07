@@ -24,6 +24,12 @@ struct PhysBody
     bool isEngine = false;    // a driven train (never couples to another engine)
 };
 
+// Hybrid track physics: bodies keep a single degree of freedom (arc length
+// along the track), but collision detection is 2D — each vehicle is an oriented
+// box placed at its world position, and contact impulses are projected back
+// onto each body's track tangent. Pushing, wedging at switch frogs and buffer
+// packing all fall out of one sequential-impulse solve instead of being
+// special-cased in track space.
 class PhysicsEngine
 {
 public:
@@ -46,46 +52,48 @@ public:
     const std::vector<Contact>& getContacts() const { return contacts; }
 
 private:
-    // A body's collision surface, transported along the track from its centre.
-    // velDir is the coordinate direction of positive body speed at this point,
-    // so motion can be compared between bodies on differently-oriented segments.
-    struct Edge
+    // One oriented box on the track, owned by a body. A single vehicle is one
+    // box; a consist (engine with its coupled cars, encoded by radiusFwd/Back)
+    // is a short chain of boxes that follows the rail through curves.
+    struct Collider
     {
-        int segment = 0;
-        float distance = 0.0f;
-        int velDir = 1;
+        int   body = 0;      // index into `bodies`
+        float cx = 0.0f, cy = 0.0f;   // centre, world
+        float ux = 1.0f, uy = 0.0f;   // unit heading (+distance direction)
+        float faceX = 1.0f, faceY = 0.0f;  // facing dir (body speed>0 moves this way)
+        float halfLen = 0.8f, halfWid = 0.35f;
     };
 
-    struct BodyEdges { Edge front, back; };
-
-    struct ScanHit
+    // A resolved contact between two colliders (or a body and a buffer, when
+    // `bodyB` < 0), expressed as a normal in world space plus the tangent
+    // projection factors that map a normal impulse onto each body's 1 DOF.
+    struct ContactC
     {
-        float gap = 1e9f;      // scan origin to nearest obstacle surface; negative = overlap
-        int bodyIndex = -1;    // index into bodies, -1 = none
-        bool buffer = false;
-        bool foul = false;     // body fouling a shared node from another leg of a
-                               // switch/crossing — block, but not colinear
-        int walkDir = 0;       // coordinate walk direction at the hit
-        int markerVelDir = 0;  // hit edge's velDir
+        int bodyA = 0, bodyB = -1;
+        float nx = 0.0f, ny = 0.0f;   // unit normal, world (points A -> B)
+        float jA = 0.0f, jB = 0.0f;   // face . n for each body (velocity Jacobian)
+        float pen = 0.0f;             // penetration depth
+        float px = 0.0f, py = 0.0f;   // contact point (for sound placement)
     };
 
-    void computeEdges (const TrackGraph& track, size_t index);
-    ScanHit scanAhead (const TrackGraph& track, size_t selfIndex,
-                       const Edge& from, int outDir, float maxRange) const;
-    bool isBlockedAhead (const TrackGraph& track, size_t index,
-                         int alongFacing, int depth) const;
+    void buildColliders (const TrackGraph& track);
+    void detectContacts (const TrackGraph& track, float dt);
 
     std::vector<PhysBody> bodies;
-    std::vector<BodyEdges> edges;
-    std::vector<Contact> contacts;
+    std::vector<Collider> colliders;
+    std::vector<ContactC> contactC;
+    std::vector<Contact>  contacts;
     int nextBodyId = 0;
 
-    static constexpr int   kSubSteps = 4;
-    static constexpr float kMaxSpeed = 30.0f;
-    static constexpr float kOverlapWindow = 0.5f;
-    static constexpr float kSeparationCap = 0.05f;
-    static constexpr float kContactEps = 0.001f;
-    static constexpr float kBlockGap = 0.01f;
+    static constexpr int   kSubSteps      = 4;
+    static constexpr int   kSolverIters   = 40;
+    static constexpr float kMaxSpeed      = 30.0f;
+    static constexpr float kHalfLen       = 0.8f;    // vehicle half length
+    static constexpr float kHalfWid       = 0.34f;   // vehicle half width
+    static constexpr float kRestitution   = 0.0f;    // trains do not bounce
+    static constexpr float kSlop          = 0.02f;   // allowed penetration
+    static constexpr float kBaumgarte     = 0.35f;   // positional correction fraction
+    static constexpr float kContactEps    = 0.001f;
 };
 
 } // namespace game

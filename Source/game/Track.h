@@ -101,6 +101,12 @@ public:
     juce::Point<float> worldPos (TrackPos pos) const;
     float trackAngle (TrackPos pos, int dir) const;
 
+    // juce-free world accessors for the physics engine (which builds in test
+    // mode without JUCE). worldXY is the world point; tangentAngle is the
+    // heading of the +distance direction at pos.
+    void  worldXY (TrackPos pos, float& x, float& y) const;
+    float tangentAngle (TrackPos pos) const { return trackAngle (pos, 1); }
+
     struct MoveResult { TrackPos pos; int dir = 1; bool stopped = false; };
     MoveResult advance (TrackPos pos, int dir, float dist) const;
 
