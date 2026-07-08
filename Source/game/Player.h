@@ -11,7 +11,7 @@ enum class CarColour { red, blue, green, yellow, count };
 
 // Throttle top speed (matches GameState::kTrainSpeed); used to normalise engine
 // speed for the audio layer.
-inline constexpr float kEngineTopSpeed = 8.0f;
+inline constexpr float kEngineTopSpeed = 6.0f;
 
 struct Car
 {
