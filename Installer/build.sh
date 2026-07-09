@@ -7,6 +7,8 @@ PROJECT_ROOT=$(pwd)
 GAME="Shunt"
 VENDOR="SocaLabs"
 BUNDLE_BASE="com.socalabs.shunt"
+EDITOR="ShuntEditor"              # CMake target
+EDITOR_APP="Shunt Level Editor"   # PRODUCT_NAME / bundle & exe base name
 
 if [ "$(uname)" = "Darwin" ]; then
   PLATFORM="macOS"
@@ -57,10 +59,12 @@ if [ "$PLATFORM" = "macOS" ]; then
   fi
 
   ART_DIR="$PROJECT_ROOT/Builds/xcode/${GAME}_artefacts/Release"
+  ART_DIR_ED="$PROJECT_ROOT/Builds/xcode/${EDITOR}_artefacts/Release"
 
   cd "$PROJECT_ROOT"
   cmake --preset xcode
-  cmake --build --preset xcode --config Release
+  cmake --build --preset xcode --config Release            # game
+  cmake --build --preset xcode --config Release --target "$EDITOR"
 
   STAGE="$PROJECT_ROOT/Installer/macOS/bin/stage"
   PKG_DIR="$PROJECT_ROOT/Installer/macOS/bin/pkgs"
@@ -69,9 +73,11 @@ if [ "$PLATFORM" = "macOS" ]; then
   mkdir -p "$PKG_DIR"
 
   cp -RL "$ART_DIR/$GAME.app" "$STAGE/app/"
+  cp -RL "$ART_DIR_ED/$EDITOR_APP.app" "$STAGE/app/"
 
   if security find-identity -v -p codesigning | grep -q "$DEV_APP_ID"; then
     codesign -s "$DEV_APP_ID" --options=runtime --timestamp --force --deep -v "$STAGE/app/$GAME.app"
+    codesign -s "$DEV_APP_ID" --options=runtime --timestamp --force --deep -v "$STAGE/app/$EDITOR_APP.app"
   else
     echo "Skipping codesign — Developer ID Application not in keychain"
   fi
@@ -83,6 +89,20 @@ if [ "$PLATFORM" = "macOS" ]; then
            --version "$VERSION" \
            --scripts "$PROJECT_ROOT/Installer/macOS/scripts" \
            "$PKG_DIR/app.pkg"
+
+  # Maps component — the shipped levels, installed to the shared folder the game
+  # scans and the editor writes; a postinstall makes it world-writable.
+  MAPS_ROOT="$PROJECT_ROOT/Installer/macOS/bin/maps-root"
+  rm -Rf "$MAPS_ROOT"
+  mkdir -p "$MAPS_ROOT"
+  cp "$PROJECT_ROOT/Maps/"*.json "$MAPS_ROOT/"
+
+  pkgbuild --root "$MAPS_ROOT" \
+           --install-location "/Library/Application Support/Shunt/Maps" \
+           --identifier "${BUNDLE_BASE}.maps.pkg" \
+           --version "$VERSION" \
+           --scripts "$PROJECT_ROOT/Installer/macOS/maps-scripts" \
+           "$PKG_DIR/maps.pkg"
 
   cp "$PROJECT_ROOT/Installer/macOS/welcome.txt" "$PKG_DIR/welcome.txt"
 
@@ -125,9 +145,11 @@ if [ "$PLATFORM" = "macOS" ]; then
 elif [ "$PLATFORM" = "linux" ]; then
   cd "$PROJECT_ROOT"
   cmake --preset ninja-gcc
-  cmake --build --preset ninja-gcc --config Release
+  cmake --build --preset ninja-gcc --config Release            # game
+  cmake --build --preset ninja-gcc --config Release --target "$EDITOR"
 
   ART_DIR="$PROJECT_ROOT/Builds/ninja-gcc/${GAME}_artefacts/Release"
+  ART_DIR_ED="$PROJECT_ROOT/Builds/ninja-gcc/${EDITOR}_artefacts/Release"
 
   STAGE="$PROJECT_ROOT/Installer/linux/bin/stage/$GAME"
   rm -Rf "$STAGE"
@@ -135,6 +157,12 @@ elif [ "$PLATFORM" = "linux" ]; then
 
   cp "$ART_DIR/$GAME" "$STAGE/"
   strip "$STAGE/$GAME"
+  cp "$ART_DIR_ED/$EDITOR_APP" "$STAGE/"
+  strip "$STAGE/$EDITOR_APP"
+
+  # Ship the maps next to the binary; the app seeds its per-user folder from here.
+  mkdir -p "$STAGE/Maps"
+  cp "$PROJECT_ROOT/Maps/"*.json "$STAGE/Maps/"
 
   cd "$PROJECT_ROOT/Installer/linux/bin/stage"
   tar -czf "$PROJECT_ROOT/bin/${GAME}_Linux.tar.gz" "$GAME"
@@ -145,14 +173,17 @@ elif [ "$PLATFORM" = "linux" ]; then
 else
   cd "$PROJECT_ROOT"
   cmake --preset vs
-  cmake --build --preset vs --config Release
+  cmake --build --preset vs --config Release            # game
+  cmake --build --preset vs --config Release --target "$EDITOR"
 
   ART_DIR="$PROJECT_ROOT/Builds/vs/${GAME}_artefacts/Release"
+  ART_DIR_ED="$PROJECT_ROOT/Builds/vs/${EDITOR}_artefacts/Release"
   STAGE="$PROJECT_ROOT/Installer/win/bin"
 
   rm -Rf "$STAGE"
   mkdir -p "$STAGE/app"
   cp "$ART_DIR/$GAME.exe" "$STAGE/app/"
+  cp "$ART_DIR_ED/$EDITOR_APP.exe" "$STAGE/app/"
 
   #
   # Sign the executable via Microsoft Trusted Signing.
@@ -192,6 +223,7 @@ else
     }
 
     sign_file "$STAGE/app/$GAME.exe"
+    sign_file "$STAGE/app/$EDITOR_APP.exe"
   else
     echo "Skipping Windows binary signing — Azure secrets not set"
   fi

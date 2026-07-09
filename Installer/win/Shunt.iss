@@ -10,6 +10,8 @@
 #define MyAppCopyright "2026 SocaLabs"
 #define MyAppURL "https://socalabs.com/"
 #define MyAppExeName "Shunt.exe"
+#define MyEditorName "Shunt Level Editor"
+#define MyEditorExeName "Shunt Level Editor.exe"
 #define MyAppVersion GameVersion
 
 [Setup]
@@ -51,12 +53,19 @@ PrivilegesRequired=admin
 [Languages]
 Name: english; MessagesFile: compiler:Default.isl
 
+[Dirs]
+; Shared maps folder the game scans and the editor writes — world-writable.
+Name: "{commonappdata}\Shunt\Maps"; Permissions: everyone-modify
+
 [Files]
-Source: "bin\app\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "bin\app\{#MyAppExeName}";    DestDir: "{app}"; Flags: ignoreversion
+Source: "bin\app\{#MyEditorExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\Maps\*.json";          DestDir: "{commonappdata}\Shunt\Maps"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\{#MyAppName}";        Filename: "{app}\{#MyAppExeName}"
-Name: "{commondesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{group}\{#MyAppName}";           Filename: "{app}\{#MyAppExeName}"
+Name: "{group}\{#MyEditorName}";        Filename: "{app}\{#MyEditorExeName}"
+Name: "{commondesktop}\{#MyAppName}";   Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional shortcuts:"

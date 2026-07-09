@@ -1,0 +1,5 @@
+#!/bin/sh
+# Make the shared maps folder world-writable so players and the editor can add
+# and edit levels without admin rights.
+chmod -R 0777 "/Library/Application Support/Shunt" 2>/dev/null || true
+exit 0

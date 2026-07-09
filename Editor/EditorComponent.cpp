@@ -1,4 +1,5 @@
 #include "EditorComponent.h"
+#include "../Source/game/MapsDir.h"
 
 namespace
 {
@@ -154,7 +155,7 @@ bool EditorComponent::openLastFile()
 void EditorComponent::openLevel()
 {
     chooser = std::make_unique<juce::FileChooser> ("Open a Shunt level",
-                    juce::File(), "*.json");
+                    currentFile != juce::File() ? currentFile : game::mapsDirectory(), "*.json");
     auto flags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
     chooser->launchAsync (flags, [this] (const juce::FileChooser& fc)
     {
@@ -197,9 +198,7 @@ void EditorComponent::saveLevel (bool forceChooser)
 
     chooser = std::make_unique<juce::FileChooser> ("Save Shunt level",
                     currentFile != juce::File() ? currentFile
-                                                : juce::File::getSpecialLocation (
-                                                      juce::File::userDocumentsDirectory)
-                                                      .getChildFile ("level.json"),
+                                                : game::mapsDirectory().getChildFile ("level.json"),
                     "*.json");
     auto flags = juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
                | juce::FileBrowserComponent::warnAboutOverwriting;

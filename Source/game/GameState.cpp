@@ -56,8 +56,7 @@ GameState::GameState (int numPlayers, int mapIndex)
     const auto& maps = getMaps();
     juce::String jsonStr;
     if (mapIndex >= 0 && mapIndex < (int) maps.size())
-        jsonStr = juce::String::fromUTF8 (maps[(size_t) mapIndex].json,
-                                          maps[(size_t) mapIndex].size);
+        jsonStr = maps[(size_t) mapIndex].file.loadFileAsString();
 
     if (jsonStr.isNotEmpty())
         track.loadFromJson (jsonStr, 0.04f);

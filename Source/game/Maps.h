@@ -1,21 +1,23 @@
 #pragma once
 
 #include <juce_core/juce_core.h>
+#include "MapsDir.h"
 #include <vector>
 
 namespace game
 {
 
-// A selectable level baked into the app. `json`/`size` point at the BinaryData
-// resource; `name` is what the title screen shows.
+// A selectable level, backed by a .json file in the shared maps folder.
 struct MapInfo
 {
-    juce::String name;
-    const char*  json = nullptr;
-    int          size = 0;
+    juce::String name;   // shown on the title screen (file name without extension)
+    juce::File   file;   // the .json on disk
 };
 
-// The maps available to pick from, in display order. Index 0 is the default.
+// The maps found in the shared folder, in display order. Scanned on first call
+// (seeding the folder from the built-in maps if it is empty) and cached; call
+// refreshMaps() to rescan. Index 0 is the default.
 const std::vector<MapInfo>& getMaps();
+void refreshMaps();
 
 } // namespace game

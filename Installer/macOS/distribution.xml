@@ -8,16 +8,27 @@
 
     <choices-outline>
         <line choice="com.socalabs.shunt.app"/>
+        <line choice="com.socalabs.shunt.maps"/>
     </choices-outline>
 
     <choice id="com.socalabs.shunt.app"
             title="Shunt"
-            description="Install Shunt to /Applications"
+            description="Install Shunt and the Shunt Level Editor to /Applications"
             visible="true"
             enabled="false"
             selected="true">
         <pkg-ref id="com.socalabs.shunt.app.pkg"/>
     </choice>
 
+    <choice id="com.socalabs.shunt.maps"
+            title="Maps"
+            description="Install the built-in maps to a shared, writable folder"
+            visible="true"
+            enabled="false"
+            selected="true">
+        <pkg-ref id="com.socalabs.shunt.maps.pkg"/>
+    </choice>
+
     <pkg-ref id="com.socalabs.shunt.app.pkg" version="0">app.pkg</pkg-ref>
+    <pkg-ref id="com.socalabs.shunt.maps.pkg" version="0">maps.pkg</pkg-ref>
 </installer-gui-script>
