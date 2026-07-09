@@ -28,8 +28,7 @@ inline juce::File mapsDirectory()
                         .getChildFile ("Maps");
     repoMaps.createDirectory();
     return repoMaps;
-   #endif
-
+   #else
     auto sub = [] (F base) -> F
     {
        #if JUCE_MAC
@@ -39,19 +38,20 @@ inline juce::File mapsDirectory()
        #endif
     };
 
-   #if JUCE_LINUX
-    auto dir = sub (F::getSpecialLocation (F::userApplicationDataDirectory));
-    dir.createDirectory();
-    return dir;
-   #else
-    auto shared = sub (F::getSpecialLocation (F::commonApplicationDataDirectory));
-    if (shared.isDirectory() || shared.createDirectory())
-        return shared;
+    #if JUCE_LINUX
+     auto dir = sub (F::getSpecialLocation (F::userApplicationDataDirectory));
+     dir.createDirectory();
+     return dir;
+    #else
+     auto shared = sub (F::getSpecialLocation (F::commonApplicationDataDirectory));
+     if (shared.isDirectory() || shared.createDirectory())
+         return shared;
 
-    // No access to the shared location (unprivileged dev run) — use the user's.
-    auto user = sub (F::getSpecialLocation (F::userApplicationDataDirectory));
-    user.createDirectory();
-    return user;
+     // No access to the shared location (unprivileged dev run) — use the user's.
+     auto user = sub (F::getSpecialLocation (F::userApplicationDataDirectory));
+     user.createDirectory();
+     return user;
+    #endif
    #endif
 }
 
