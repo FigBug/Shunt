@@ -1,3 +1,11 @@
+0.0.5:
+- New physics engine: 2D contact detection with a track-constrained impulse
+  solver — smoother pushing, wedging and collisions, especially at switches
+- New map: Toronto
+- The Shunt Level Editor now ships in the installers
+- Maps load from a shared, writable folder (installed there and editable in the
+  editor) instead of being built into the app
+
 0.0.4:
 - Free cars no longer pile up on the same spot
 - Score sound plays once per shipment instead of once per car
