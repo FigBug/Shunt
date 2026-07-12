@@ -497,7 +497,10 @@ void GameState::update (float dt, gin::GameControllerManager& controllers)
     // engine sound at most once every 2s, so a grind or a multi-substep crash
     // doesn't machine-gun the sound.
     for (auto& p : players)
+    {
         p.collisionCooldown = juce::jmax (0.0f, p.collisionCooldown - dt);
+        p.ramCooldown       = juce::jmax (0.0f, p.ramCooldown - dt);
+    }
 
     constexpr float kCollisionSpeed = 2.5f;   // closing speed to count as a crash
     for (const auto& ct : physics.getContacts())
@@ -569,6 +572,22 @@ void GameState::update (float dt, gin::GameControllerManager& controllers)
             c.pos = { b->segment, b->distance };
             c.dir = b->dir;
         }
+    }
+
+    // Ram-stealing: a hard train-to-train hit shears the outermost car off the
+    // end that was struck, on each consist carrying a car there. The freed car
+    // rolls loose at the impact point for anyone (the rammer included) to grab.
+    for (const auto& ct : physics.getContacts())
+    {
+        if (ct.speed < kRamBreakSpeed) continue;
+
+        Player* a = playerForBody (ct.bodyA);
+        Player* b = playerForBody (ct.bodyB);
+        if (a == nullptr || b == nullptr) continue;   // a buffer or a free car — not a steal
+
+        juce::Point<float> hit { ct.px, ct.py };
+        tryRamBreak (*a, hit);
+        tryRamBreak (*b, hit);
     }
 
     for (auto& p : players)
@@ -667,6 +686,72 @@ void GameState::decoupleAll (Player& p, float engineSpeed)
     p.hasColourLock = false;
     p.recoupleLock = true;
     p.recoupleLockDist = 0.0f;
+}
+
+Player* GameState::playerForBody (int bodyId)
+{
+    if (bodyId < 0) return nullptr;
+    for (auto& p : players)
+        if (p.bodyId == bodyId)
+            return &p;
+    return nullptr;   // a free car's body, not an engine
+}
+
+void GameState::tryRamBreak (Player& victim, juce::Point<float> hit)
+{
+    if (victim.ramCooldown > 0.0f) return;    // already shed a car this hit
+    if (victim.totalCars() == 0)   return;
+
+    // Which end took the hit? Compare the impact point to each end's outermost
+    // vehicle. An end with no cars is the bare engine, so a hit there is a shove,
+    // not a theft — matching "ram the tail to steal, ram the loco to just push".
+    auto frontEdge = track.worldPos (track.advance (victim.pos,  victim.dir,
+                        (float) victim.frontCars.size() * kCarSpacing).pos);
+    auto rearEdge  = track.worldPos (track.advance (victim.pos, -victim.dir,
+                        (float) victim.rearCars.size()  * kCarSpacing).pos);
+
+    bool front = hit.getDistanceFrom (frontEdge) < hit.getDistanceFrom (rearEdge);
+    const auto& list = front ? victim.frontCars : victim.rearCars;
+    if (list.empty()) return;                 // struck a bare engine end — a shove
+
+    breakOffCar (victim, front);
+}
+
+void GameState::breakOffCar (Player& victim, bool front)
+{
+    auto& list = front ? victim.frontCars : victim.rearCars;
+    if (list.empty()) return;
+
+    // The outermost car sits list.size() slots out from the engine. Set it free
+    // there, keeping the engine's speed projected onto the car's direction (rear
+    // cars face away, so the sign flips), just like a normal decouple.
+    int   side   = front ? victim.dir : -victim.dir;
+    float offset = (float) list.size() * kCarSpacing;
+    auto  drop   = track.advance (victim.pos, side, offset);
+
+    int carId = list.back();
+    for (auto& c : cars)
+        if (c.id == carId)
+        {
+            c.free   = true;
+            c.pos    = drop.pos;
+            c.dir    = drop.dir;
+            c.bodyId = physics.addBody (drop.pos.segment, drop.pos.distance,
+                                        drop.dir, kCarMass, kCarFriction);
+            physics.findBody (c.bodyId)->speed = front ? victim.speed : -victim.speed;
+            break;
+        }
+    list.pop_back();
+
+    // Lock the victim out of instantly re-grabbing its own car, and rate-limit
+    // further shearing so one collision peels at most one car off this consist.
+    victim.recoupleLock     = true;
+    victim.recoupleLockDist = 0.0f;
+    victim.ramCooldown      = kRamCooldown;
+    if (victim.totalCars() == 0)
+        victim.hasColourLock = false;
+
+    soundEvents.push_back ({ SoundEvent::uncouple, track.worldPos (drop.pos) });
 }
 
 void GameState::checkCoupling (Player& p)

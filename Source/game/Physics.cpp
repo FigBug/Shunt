@@ -300,8 +300,15 @@ void PhysicsEngine::step (const TrackGraph& track, float dt)
                     B.speed += -ct.jB * P / B.mass;
                 }
 
-                if (iter == 0 && vn > 0.5f)   // first pass: report the impact for sound
-                    contacts.push_back ({ A.segment, A.distance, vn });
+                if (iter == 0 && vn > 0.5f)   // first pass: report the impact for sound / ram-steal
+                {
+                    Contact rc;
+                    rc.segment = A.segment; rc.distance = A.distance; rc.speed = vn;
+                    rc.bodyA = A.id;
+                    rc.bodyB = (ct.bodyB >= 0) ? bodies[(size_t) ct.bodyB].id : -1;
+                    rc.px = ct.px; rc.py = ct.py;
+                    contacts.push_back (rc);
+                }
             }
         }
 

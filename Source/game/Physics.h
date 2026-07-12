@@ -47,8 +47,15 @@ public:
 
     // Approaching impacts resolved during the last step(). `speed` is the
     // closing speed at contact — larger means a harder hit. Location is on the
-    // track so the host can place a collision sound.
-    struct Contact { int segment = 0; float distance = 0.0f; float speed = 0.0f; };
+    // track so the host can place a collision sound. bodyA/bodyB are the
+    // PhysBody ids that collided (bodyB == -1 for a buffer stop); px/py are the
+    // world contact point, so the host can tell which end of a consist was hit.
+    struct Contact
+    {
+        int   segment = 0; float distance = 0.0f; float speed = 0.0f;
+        int   bodyA = -1, bodyB = -1;
+        float px = 0.0f, py = 0.0f;
+    };
     const std::vector<Contact>& getContacts() const { return contacts; }
 
 private:

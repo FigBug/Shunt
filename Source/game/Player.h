@@ -76,6 +76,7 @@ struct Player
     bool recoupleLock       = false;
     float recoupleLockDist  = 0.0f;
     float collisionCooldown = 0.0f;   // gap before this engine can sound a crash again
+    float ramCooldown       = 0.0f;   // gap before a ram can knock another car off this consist
     float smokeAccum = 0.0f;          // fractional puffs accrued for smoke spawning
 
     // The switch this train is lined up to throw (next one in its direction of
