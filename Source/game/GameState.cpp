@@ -788,80 +788,59 @@ void GameState::checkScoring (Player& p)
         if ((int) p.carryColour != dz.colourIndex)
             continue;
 
-        auto dzPos = track.getNode (dz.node).position;
+        // Deliver the whole consist in one go once the engine itself is centred
+        // on the drop-off. The drop-off lives on a specific track, so require the
+        // engine to sit on a segment running through the node — a train merely
+        // passing close on a parallel track can't score.
+        const auto& locoSeg = track.getSegment (p.pos.segment);
+        if (locoSeg.nodeA != dz.node && locoSeg.nodeB != dz.node)
+            continue;
 
-        auto tryScore = [&] (std::vector<int>& list, bool front) -> bool
+        auto dzPos   = track.getNode (dz.node).position;
+        auto locoPos = track.worldPos (p.pos);
+        if (locoPos.getDistanceFrom (dzPos) >= kScoreDistance)
+            continue;
+
+        // Hand over every coupled car. (Coupled cars have no physics body, so
+        // there's nothing to clean up beyond dropping them from the world.)
+        int delivered = p.totalCars();
+        auto removeCars = [&] (std::vector<int>& list)
         {
-            if (list.empty()) return false;
-
-            // Only the outermost car (the leading end as the consist is pushed
-            // through the drop-off) can be delivered. Coupled cars have no
-            // independent position — each rides at a fixed slot (index) from the
-            // engine — so removing an *inner* car would renumber and teleport
-            // every outer car one slot toward the engine, telescoping the whole
-            // train through the drop-off at once. Delivering only the outermost
-            // car leaves the rest exactly where they are; the next car becomes
-            // deliverable once it in turn reaches the drop-off.
-            int i = (int) list.size() - 1;
-
-            // The drop-off lives on a specific track. Require the car to be on a
-            // segment that actually runs through the drop-off node, so a car
-            // merely passing close on a parallel track can't score — you have to
-            // pass over the drop-off itself.
-            auto carPos = carTrackPos (p, front, i);
-            const auto& seg = track.getSegment (carPos.segment);
-            if (seg.nodeA != dz.node && seg.nodeB != dz.node)
-                return false;
-
-            // The car only scores once it's *fully* inside the zone: measure
-            // from the drop-off to whichever end of the car is farther away
-            // (center walked ±half a car along the track), not just its centre.
-            int walkDir = front ? p.dir : -p.dir;
-            auto endA = track.worldPos (track.advance (carPos,  walkDir, kVehicleHalfLen).pos);
-            auto endB = track.worldPos (track.advance (carPos, -walkDir, kVehicleHalfLen).pos);
-            float cd = juce::jmax (endA.getDistanceFrom (dzPos),
-                                   endB.getDistanceFrom (dzPos));
-            if (cd >= kScoreDistance)
-                return false;
-
-            int carId = list.back();
-            cars.erase (
-                std::remove_if (cars.begin(), cars.end(),
-                    [carId] (const Car& c) { return c.id == carId; }),
-                cars.end());
-            list.pop_back();
-
-            // Cars delivered back-to-back (a whole consist arriving together)
-            // build a streak, so the Nth car in a run is worth N points — bigger
-            // shipments score progressively more.
-            bool firstOfShipment = (p.deliveryStreak == 0);
-            p.deliveryStreak++;
-            p.deliveryTimer = kDeliveryStreakWindow;
-            p.score += p.deliveryStreak;
-
-            // Only sound the score cue once per shipment — not once for every car
-            // in the same consist arriving together.
-            if (firstOfShipment)
-                soundEvents.push_back ({ SoundEvent::score, dzPos });
-            return true;
+            for (int carId : list)
+                cars.erase (
+                    std::remove_if (cars.begin(), cars.end(),
+                        [carId] (const Car& c) { return c.id == carId; }),
+                    cars.end());
+            list.clear();
         };
+        removeCars (p.frontCars);
+        removeCars (p.rearCars);
 
-        if (tryScore (p.frontCars, true) || tryScore (p.rearCars, false))
+        // The whole consist arrives together as one shipment: build the streak so
+        // the Nth car is worth N points (bigger consists score progressively
+        // more), and sound the score cue once.
+        bool firstOfShipment = (p.deliveryStreak == 0);
+        for (int i = 0; i < delivered; ++i)
         {
-            if (p.totalCars() == 0)
-                p.hasColourLock = false;
-
-            bool anyCarsLeft = false;
-            for (const auto& c : cars)
-                if (c.free) { anyCarsLeft = true; break; }
-            for (const auto& other : players)
-                if (other.totalCars() > 0) { anyCarsLeft = true; break; }
-
-            if (! anyCarsLeft)
-                gameOver = true;
-
-            return;
+            p.deliveryStreak++;
+            p.score += p.deliveryStreak;
         }
+        p.deliveryTimer = kDeliveryStreakWindow;
+        if (firstOfShipment)
+            soundEvents.push_back ({ SoundEvent::score, dzPos });
+
+        p.hasColourLock = false;
+
+        bool anyCarsLeft = false;
+        for (const auto& c : cars)
+            if (c.free) { anyCarsLeft = true; break; }
+        for (const auto& other : players)
+            if (other.totalCars() > 0) { anyCarsLeft = true; break; }
+
+        if (! anyCarsLeft)
+            gameOver = true;
+
+        return;
     }
 }
 

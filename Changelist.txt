@@ -1,3 +1,7 @@
+0.0.8:
+- Deliveries: drive the engine onto a matching drop-off to deliver the whole
+  coupled consist at once (fixes cars being skipped or vanishing early)
+
 0.0.7:
 - Save player count
 
