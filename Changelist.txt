@@ -1,3 +1,6 @@
+0.0.7:
+- Save player count
+
 0.0.6:
 - Steal cars by ramming: a hard train-to-train hit sets the struck consist loose
 - A ramming collision now uncouples the whole struck train, not just one car
