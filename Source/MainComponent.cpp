@@ -13,8 +13,9 @@ MainComponent::MainComponent()
     opts.osxLibrarySubFolder = "Application Support";
     settings = std::make_unique<juce::PropertiesFile> (opts);
 
-    savedMapIndex = settings->getIntValue ("mapIndex", 0);   // remembered from last session
-    savedVolume   = settings->getIntValue ("volume", 80) / 100.0f;   // stored as a percentage
+    savedMapIndex   = settings->getIntValue ("mapIndex", 0);   // remembered from last session
+    savedVolume     = settings->getIntValue ("volume", 80) / 100.0f;   // stored as a percentage
+    savedNumPlayers = juce::jlimit (2, 4, settings->getIntValue ("numPlayers", savedNumPlayers));
 
     if (auto* m = std::getenv ("SHUNT_MAP"))   // dev hook: preselect a map for testing
         savedMapIndex = juce::String (m).getIntValue();
@@ -42,10 +43,11 @@ void MainComponent::startGame()
     savedVolume   = titleScreen->getVolume();
     soundEngine.setVolume (savedVolume);
 
-    if (settings != nullptr)   // remember the chosen map and volume for next launch
+    if (settings != nullptr)   // remember the chosen map, volume and player count for next launch
     {
         settings->setValue ("mapIndex", savedMapIndex);
         settings->setValue ("volume", juce::roundToInt (savedVolume * 100.0f));
+        settings->setValue ("numPlayers", savedNumPlayers);
         settings->saveIfNeeded();
     }
 
