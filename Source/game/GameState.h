@@ -68,13 +68,12 @@ public:
 private:
     void  handleActions   (Player& p, float engineSpeed, bool flip, bool uncouple);
     void  decoupleAll     (Player& p, float engineSpeed);
-    // Ram-stealing: a hard train-to-train hit shears the outermost car off the
-    // end that was struck. playerForBody maps a physics body back to its engine;
-    // tryRamBreak works out which end took the hit and, if a car sits there,
-    // breakOffCar sets it loose at that spot for anyone to grab.
+    // Ram-stealing: a hard train-to-train hit scatters the struck consist —
+    // every car uncouples and rolls loose for anyone to grab. playerForBody maps
+    // a physics body back to its engine; tryRamBreak works out which end took the
+    // hit and, if a car sits there, decouples the whole train via decoupleAll.
     Player* playerForBody (int bodyId);
     void  tryRamBreak     (Player& victim, juce::Point<float> hit);
-    void  breakOffCar     (Player& victim, bool front);
     void  flipSwitch      (int switchNode);   // toggle + cooldown + sound cue
 
     // The next switch a train will reach in its current direction of travel,
@@ -148,9 +147,9 @@ private:
     // whole consist scores as a scaling combo.
     static constexpr float kDeliveryStreakWindow = 1.5f;
     static constexpr int   kMaxConsist     = 100;
-    // Ram-stealing: a train-to-train hit closing faster than this shears the
-    // struck consist's outermost car loose; kRamCooldown then gates that
-    // consist so one collision peels at most one car.
+    // Ram-stealing: a train-to-train hit closing faster than this scatters the
+    // struck consist, uncoupling all its cars; kRamCooldown then gates that
+    // consist so one collision only shears it once.
     static constexpr float kRamBreakSpeed  = 4.0f;
     static constexpr float kRamCooldown    = 1.0f;
     static constexpr int   kInitialCars    = 20;

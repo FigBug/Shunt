@@ -714,44 +714,12 @@ void GameState::tryRamBreak (Player& victim, juce::Point<float> hit)
     const auto& list = front ? victim.frontCars : victim.rearCars;
     if (list.empty()) return;                 // struck a bare engine end — a shove
 
-    breakOffCar (victim, front);
-}
-
-void GameState::breakOffCar (Player& victim, bool front)
-{
-    auto& list = front ? victim.frontCars : victim.rearCars;
-    if (list.empty()) return;
-
-    // The outermost car sits list.size() slots out from the engine. Set it free
-    // there, keeping the engine's speed projected onto the car's direction (rear
-    // cars face away, so the sign flips), just like a normal decouple.
-    int   side   = front ? victim.dir : -victim.dir;
-    float offset = (float) list.size() * kCarSpacing;
-    auto  drop   = track.advance (victim.pos, side, offset);
-
-    int carId = list.back();
-    for (auto& c : cars)
-        if (c.id == carId)
-        {
-            c.free   = true;
-            c.pos    = drop.pos;
-            c.dir    = drop.dir;
-            c.bodyId = physics.addBody (drop.pos.segment, drop.pos.distance,
-                                        drop.dir, kCarMass, kCarFriction);
-            physics.findBody (c.bodyId)->speed = front ? victim.speed : -victim.speed;
-            break;
-        }
-    list.pop_back();
-
-    // Lock the victim out of instantly re-grabbing its own car, and rate-limit
-    // further shearing so one collision peels at most one car off this consist.
-    victim.recoupleLock     = true;
-    victim.recoupleLockDist = 0.0f;
-    victim.ramCooldown      = kRamCooldown;
-    if (victim.totalCars() == 0)
-        victim.hasColourLock = false;
-
-    soundEvents.push_back ({ SoundEvent::uncouple, track.worldPos (drop.pos) });
+    // A hard hit on a car scatters the whole consist: every car uncouples and
+    // rolls loose for anyone (the rammer included) to grab. decoupleAll clears
+    // both ends and sets the recouple lock; rate-limit it so one collision only
+    // shears the train once.
+    victim.ramCooldown = kRamCooldown;
+    decoupleAll (victim, victim.speed);
 }
 
 void GameState::checkCoupling (Player& p)

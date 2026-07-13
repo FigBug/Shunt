@@ -1,3 +1,7 @@
+0.0.6:
+- Steal cars by ramming: a hard train-to-train hit sets the struck consist loose
+- A ramming collision now uncouples the whole struck train, not just one car
+
 0.0.5:
 - New physics engine: 2D contact detection with a track-constrained impulse
   solver — smoother pushing, wedging and collisions, especially at switches
