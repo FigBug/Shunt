@@ -141,7 +141,7 @@ private:
     static constexpr float kEngineForce   = 24.0f;
     static constexpr float kCoastForce    = 6.0f;
     static constexpr float kBrakeForce    = 36.0f;
-    static constexpr float kCoupleDistance = 0.5f;
+    static constexpr float kCoupleDistance = 0.3f;
     static constexpr float kScoreDistance  = 2.5f;
     // Cars delivered within this window of each other count as one run, so the
     // whole consist scores as a scaling combo.

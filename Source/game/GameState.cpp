@@ -803,7 +803,14 @@ void GameState::checkScoring (Player& p)
                 if (seg.nodeA != dz.node && seg.nodeB != dz.node)
                     continue;
 
-                float cd = track.worldPos (carPos).getDistanceFrom (dzPos);
+                // The car only scores once it's *fully* inside the zone: measure
+                // from the drop-off to whichever end of the car is farther away
+                // (center walked ±half a car along the track), not just its centre.
+                int walkDir = front ? p.dir : -p.dir;
+                auto endA = track.worldPos (track.advance (carPos,  walkDir, kVehicleHalfLen).pos);
+                auto endB = track.worldPos (track.advance (carPos, -walkDir, kVehicleHalfLen).pos);
+                float cd = juce::jmax (endA.getDistanceFrom (dzPos),
+                                       endB.getDistanceFrom (dzPos));
                 if (cd < kScoreDistance)
                 {
                     int carId = list[(size_t) i];
