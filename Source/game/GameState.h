@@ -84,6 +84,9 @@ private:
     // contested one (the closer train), and whether it can be thrown.
     void  updateSwitchTargets();
     float aiUpdate        (Player& p, float dt);
+    // Whether the AI has a worthwhile reason to spend its boost reserve right now
+    // (a clear run toward a car or a drop-off) — vs. saving it during jams.
+    bool  aiWantsBoost    (const Player& p) const;
     void  checkCoupling   (Player& p);
     void  checkScoring    (Player& p);
     void  placeInitialCars();
@@ -160,6 +163,12 @@ private:
     static constexpr float kBoostFillTime  = 25.0f;
     static constexpr float kBoostEmptyTime = 2.5f;
     static constexpr float kBoostSpeedMult = 1.5f;
+    // The horn can only be triggered with at least this much in reserve, but once
+    // going it keeps sounding until the reserve is fully spent.
+    static constexpr float kBoostTriggerLevel = 0.25f;
+    // The AI eases off the boost within this distance of its goal so the speed
+    // ramp can brake and it stops cleanly on the car/drop-off, not overshoot it.
+    static constexpr float kAiBoostEaseDist = 10.0f;
 
     // Wind (ported from Heligoland). The vector's length is strength 0..1; it
     // drifts toward a fresh random target every kWindChangeInterval seconds.

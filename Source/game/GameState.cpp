@@ -440,8 +440,12 @@ void GameState::update (float dt, gin::GameControllerManager& controllers)
         if (p.ai.has_value())
         {
             auto& brain = *p.ai;
-            if (p.boost >= 1.0f) brain.wantBoost = true;    // charged — spend it
-            if (p.boost <= 0.0f) brain.wantBoost = false;   // empty — recharge
+            // Spend the reserve in bursts, but only when there's a worthwhile
+            // reason (a clear run at a car or a drop-off): commit once it's fully
+            // charged and keep spending until the reason passes or it runs dry.
+            bool worth = aiWantsBoost (p);
+            if (worth && p.boost >= 1.0f) brain.wantBoost = true;    // charged + a reason — commit
+            if (! worth || p.boost <= 0.0f) brain.wantBoost = false; // no reason, or empty — recharge
             wantBoost = brain.wantBoost && std::abs (speed) > 0.1f;
         }
         else
@@ -449,17 +453,24 @@ void GameState::update (float dt, gin::GameControllerManager& controllers)
             wantBoost = p.hornHeld;
         }
 
-        bool boosting = wantBoost && p.boost > 0.0f;
+        // Trigger the boost only with enough in reserve (>= kBoostTriggerLevel),
+        // but once it's going let it run until the reserve is empty — p.boosting
+        // carries last frame's state, so holding the horn drains straight to zero
+        // instead of stuttering on and off near the trigger level.
+        bool boosting = wantBoost
+                        && (p.boosting ? p.boost > 0.0f
+                                       : p.boost >= kBoostTriggerLevel);
         p.boost = boosting ? juce::jmax (0.0f, p.boost - dt / kBoostEmptyTime)
                            : juce::jmin (1.0f, p.boost + dt / kBoostFillTime);
         p.boosting = boosting;   // for darker smoke + the AI's horn
         if (boosting)
             speed *= kBoostSpeedMult;
 
-        // The horn and the boost are the same button, so an engine sounds its
-        // horn while boosting — including the AI, which has no button input.
-        if (p.ai.has_value())
-            p.hornHeld = boosting;
+        // The horn and the boost are one and the same: an engine sounds its horn
+        // exactly while it's boosting. So the horn won't trigger below the reserve
+        // threshold and cuts out the instant the reserve empties — and while it's
+        // sounding the reserve is draining, never recharging.
+        p.hornHeld = boosting;
 
         // The throttle sets a *target* speed; the engine ramps toward it. The
         // collision boundary extends over the coupled cars on each side.
@@ -1279,6 +1290,44 @@ float GameState::carAngle (const Player& p, bool front, int index) const
 // ============================================================================
 // AI
 // ============================================================================
+
+bool GameState::aiWantsBoost (const Player& p) const
+{
+    if (! p.ai.has_value())
+        return false;
+
+    const auto& brain = *p.ai;
+
+    // Boost is a rare, powerful burst (seconds to spend, far longer to refill),
+    // so the AI only spends it on a clear run toward something worth reaching
+    // faster: hauling a consist home to its drop-off, or racing empty to claim a
+    // target car before a rival grabs it. Anything else — idling, leaving a
+    // drop-off — lets the reserve recharge.
+    if (brain.state == AiBrain::returningHome)
+    {
+        if (p.totalCars() == 0) return false;   // nothing to deliver
+    }
+    else if (brain.state == AiBrain::seekingCar)
+    {
+        if (brain.targetCarId < 0) return false;   // no car picked yet
+    }
+    else
+    {
+        return false;
+    }
+
+    // Don't burn boost while fighting for position — shoving, backing out of a
+    // jam, or holding for a blocked drop-off. It'd just drain against a wall.
+    if (brain.backoffTimer > 0.0f || brain.waiting) return false;
+    if (brain.stuckCount > 0 || brain.noProgress > 0) return false;
+
+    // Ease off near the goal so the speed ramp can brake and the engine stops
+    // cleanly on the car / drop-off instead of overshooting at boosted speed.
+    float distToGoal = track.worldPos (p.pos).getDistanceFrom (track.worldPos (brain.targetPos));
+    if (distToGoal < kAiBoostEaseDist) return false;
+
+    return true;
+}
 
 float GameState::aiUpdate (Player& p, float dt)
 {
