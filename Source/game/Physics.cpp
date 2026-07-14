@@ -255,7 +255,10 @@ void PhysicsEngine::step (const TrackGraph& track, float dt)
 {
     contacts.clear();
     for (auto& b : bodies)
+    {
         b.moved = 0.0f;
+        b.wedged = false;
+    }
 
     float subDt = dt / (float) kSubSteps;
 
@@ -356,7 +359,16 @@ void PhysicsEngine::step (const TrackGraph& track, float dt)
             float k = ct.jA * ct.jA * invMassA;
             if (ct.bodyB >= 0)
                 k += ct.jB * ct.jB / bodies[(size_t) ct.bodyB].mass;
-            if (k < 1.0e-6f) continue;
+            if (k < 1.0e-6f)
+            {
+                // A penetrating contact that no track DOF can separate — a frog
+                // wedge. Flag the free car(s) so the settle pass rolls them clear;
+                // an engine drives itself out, so it isn't flagged.
+                if (! A.isEngine) A.wedged = true;
+                if (ct.bodyB >= 0 && ! bodies[(size_t) ct.bodyB].isEngine)
+                    bodies[(size_t) ct.bodyB].wedged = true;
+                continue;
+            }
 
             float lambda = kBaumgarte * corr / k;
 
@@ -379,9 +391,49 @@ void PhysicsEngine::step (const TrackGraph& track, float dt)
         }
     }
 
+    // Roll any resting free car off a switch frog it's fouling, so it can't trap
+    // a train arriving from another branch.
+    clearSwitchFouling (track, dt);
+
     // Drop removed bodies once the step is done (indices stay valid during it).
     bodies.erase (std::remove_if (bodies.begin(), bodies.end(),
         [] (const PhysBody& b) { return ! b.active; }), bodies.end());
+}
+
+void PhysicsEngine::clearSwitchFouling (const TrackGraph& track, float dt)
+{
+    const float maxNudge = kFoulNudgeSpeed * dt;
+
+    for (auto& b : bodies)
+    {
+        if (! b.active || b.isEngine) continue;              // only free cars
+        if (! b.wedged) continue;                            // only ones the solver couldn't relieve
+        if (std::abs (b.speed) > kFoulRestSpeed) continue;   // leave rolling cars to the solver
+
+        const auto& seg = track.getSegment (b.segment);
+
+        // Does either end of this segment carry a switch, and is the car's near
+        // edge (centre ± half a car) fouling its frog?
+        bool switchA = track.findSwitch (seg.nodeA) != nullptr;
+        bool switchB = track.findSwitch (seg.nodeB) != nullptr;
+        float edgeToA = b.distance - kHalfLen;                    // gap to nodeA (at 0)
+        float edgeToB = seg.length - (b.distance + kHalfLen);     // gap to nodeB (at length)
+        bool foulA = switchA && edgeToA < kFrogClearance;
+        bool foulB = switchB && edgeToB < kFrogClearance;
+        if (! foulA && ! foulB) continue;                        // not fouling anything
+
+        // The band of resting positions that keeps the whole car on this segment
+        // and clear of any switch end. If it's empty (a short segment pinched
+        // between two switches) there's nowhere safe to go — leave it be.
+        float lo = kHalfLen + (switchA ? kFrogClearance : 0.0f);
+        float hi = seg.length - kHalfLen - (switchB ? kFrogClearance : 0.0f);
+        if (hi < lo) continue;
+
+        // Creep toward the clear band from whichever frog is fouled; clamping to
+        // the band makes it settle there instead of oscillating between two ends.
+        float target = foulB ? b.distance - maxNudge : b.distance + maxNudge;
+        b.distance = std::max (lo, std::min (hi, target));
+    }
 }
 
 } // namespace game

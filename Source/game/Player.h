@@ -25,7 +25,7 @@ struct Car
 
 struct AiBrain
 {
-    enum State { idle, seekingCar, returningHome, leavingDropOff };
+    enum State { idle, seekingCar, returningHome, leavingDropOff, wandering };
     State state = idle;
     int targetCarId = -1;
     TrackPos targetPos;

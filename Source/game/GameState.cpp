@@ -33,6 +33,7 @@ namespace
             case AiBrain::seekingCar:    return "seek";
             case AiBrain::returningHome: return "return";
             case AiBrain::leavingDropOff:return "leave";
+            case AiBrain::wandering:     return "wander";
         }
         return "?";
     }
@@ -1329,6 +1330,35 @@ bool GameState::aiWantsBoost (const Player& p) const
     return true;
 }
 
+float GameState::aiWander (Player& p, bool rethink)
+{
+    auto& brain = *p.ai;
+
+    if (brain.dirSign == 0)
+        brain.dirSign = (p.dir >= 0) ? 1 : -1;
+
+    // Turn around when we've stalled — i.e. run into a buffer/dead end and barely
+    // moved since the last think.
+    if (rethink)
+    {
+        auto cur = track.worldPos (p.pos);
+        if (brain.lastPos.getDistanceFrom (cur) < 0.5f)
+            brain.dirSign = -brain.dirSign;
+        brain.lastPos = cur;
+    }
+
+    // Coin-flip the switch we're lined up on (and own) so we take a random branch.
+    // Rate-limited via switchCooldown so we don't toggle it every frame.
+    if (brain.switchCooldown <= 0.0f && p.ringSwitch >= 0 && p.ringFlippable)
+    {
+        if (rng().nextBool())
+            flipSwitch (p.ringSwitch);
+        brain.switchCooldown = 0.6f;
+    }
+
+    return (float) brain.dirSign * kTrainSpeed * 0.5f;
+}
+
 float GameState::aiUpdate (Player& p, float dt)
 {
     if (! p.ai.has_value()) return 0.0f;
@@ -1383,6 +1413,31 @@ float GameState::aiUpdate (Player& p, float dt)
             brain.stuckCount = 0;
         }
         return kTrainSpeed * 0.7f;
+    }
+
+    // Nothing left to collect and nothing to deliver — mill about at half speed.
+    // Snap back to work the moment a car frees up (e.g. one gets rammed loose) or
+    // we happen to roll over one and couple it.
+    if (brain.state == AiBrain::wandering)
+    {
+        if (p.totalCars() > 0)
+        {
+            brain.state = AiBrain::returningHome;
+        }
+        else
+        {
+            bool anyFree = false;
+            for (const auto& c : cars)
+                if (c.free) { anyFree = true; break; }
+
+            if (anyFree)
+            {
+                brain.state = AiBrain::seekingCar;
+                brain.dirSign = 0;
+            }
+            else
+                return aiWander (p, rethink);
+        }
     }
 
     // Backing off to break a jam (usually against another engine): ease back
@@ -1518,8 +1573,12 @@ float GameState::aiUpdate (Player& p, float dt)
                 brain.targetCarId = -1;
         }
 
-        if (! hasTarget)
-            return 0.0f;
+        if (! hasTarget)   // no free car anywhere — go mill about instead of idling
+        {
+            brain.state = AiBrain::wandering;
+            brain.dirSign = 0;
+            return aiWander (p, rethink);
+        }
     }
     else if (brain.state == AiBrain::returningHome)
     {

@@ -22,6 +22,7 @@ struct PhysBody
     float moved = 0.0f;       // distance travelled during the last step()
     bool active = true;
     bool isEngine = false;    // a driven train (never couples to another engine)
+    bool wedged = false;      // in a contact no track DOF can relieve, this step
 };
 
 // Hybrid track physics: bodies keep a single degree of freedom (arc length
@@ -85,6 +86,10 @@ private:
 
     void buildColliders (const TrackGraph& track);
     void detectContacts (const TrackGraph& track, float dt);
+    // A free car resting on a switch frog can trap a train arriving off another
+    // branch: their rails diverge, so the contact impulse can't relieve the wedge
+    // (see PHYSICS_SPEC). Creep any such resting car off the frog to free the line.
+    void clearSwitchFouling (const TrackGraph& track, float dt);
 
     std::vector<PhysBody> bodies;
     std::vector<Collider> colliders;
@@ -101,6 +106,10 @@ private:
     static constexpr float kSlop          = 0.02f;   // allowed penetration
     static constexpr float kBaumgarte     = 0.35f;   // positional correction fraction
     static constexpr float kContactEps    = 0.001f;
+    // Switch-frog clearance for resting free cars.
+    static constexpr float kFoulRestSpeed = 0.1f;    // treat below this as parked
+    static constexpr float kFrogClearance = 0.5f;    // gap a car's edge must keep from a switch node
+    static constexpr float kFoulNudgeSpeed = 2.0f;   // how fast it creeps clear, units/s
 };
 
 } // namespace game

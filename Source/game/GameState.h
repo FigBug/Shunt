@@ -87,6 +87,9 @@ private:
     // Whether the AI has a worthwhile reason to spend its boost reserve right now
     // (a clear run toward a car or a drop-off) — vs. saving it during jams.
     bool  aiWantsBoost    (const Player& p) const;
+    // Nothing to collect or deliver: roll around at half throttle, taking a random
+    // branch at each switch, so idle engines keep milling about.
+    float aiWander        (Player& p, bool rethink);
     void  checkCoupling   (Player& p);
     void  checkScoring    (Player& p);
     void  placeInitialCars();
