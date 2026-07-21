@@ -1,3 +1,6 @@
+0.0.10:
+- New game mode
+
 0.0.9:
 - Improve boost mode
 
