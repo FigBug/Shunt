@@ -1,3 +1,6 @@
+0.0.9:
+- Improve boost mode
+
 0.0.8:
 - Deliveries: drive the engine onto a matching drop-off to deliver the whole
   coupled consist at once (fixes cars being skipped or vanishing early)
