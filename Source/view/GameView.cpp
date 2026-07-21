@@ -176,6 +176,9 @@ void GameView::drawSidings (juce::Graphics& g, const juce::AffineTransform& w2s,
 
     for (const auto& dz : track.getDropOffs())
     {
+        if (! dz.active)
+            continue;   // random mode hides drop-offs that aren't currently live
+
         auto dzPos = track.getNode (dz.node).position;
         dzPos.applyTransform (w2s);
 

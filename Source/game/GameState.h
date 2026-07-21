@@ -10,6 +10,11 @@ namespace gin { class GameControllerManager; }
 namespace game
 {
 
+// Classic: every drop-off the map defines stays put with its fixed colour.
+// Random: only a couple of drop-offs are live at once, and every so often the
+// game reshuffles which ones show and what colours they want.
+enum class GameMode { classic, random };
+
 // A drifting puff of engine smoke. Ported from Heligoland's funnel smoke —
 // each puff carries a fixed random wind-angle offset so a plume disperses
 // rather than moving as one rigid blob.
@@ -26,7 +31,8 @@ struct SmokePuff
 class GameState
 {
 public:
-    explicit GameState (int numPlayers, int mapIndex = 0);
+    explicit GameState (int numPlayers, int mapIndex = 0,
+                        GameMode mode = GameMode::classic);
 
     void update (float dt, gin::GameControllerManager& controllers);
 
@@ -113,6 +119,12 @@ private:
     // Per-game diagnostic log: train/car positions and AI state, one file per
     // game under ~/Library/Logs/Shunt. Read it after a play-test to see what the
     // AI was thinking when something went wrong.
+    // Random mode: pick kRandomActiveDropOffs of the map's drop-offs to be live,
+    // each with a fresh random colour, and restart the shuffle timer.
+    void  shuffleDropOffs();
+    // True when some live drop-off currently accepts this colour. Always true in
+    // classic mode (every drop-off is live), so callers need no mode check.
+    bool  colourHasActiveDropOff (int colourIndex) const;
     void  openLog     (int numPlayers, int mapIndex);
     void  logLine     (const juce::String& text);
     void  logSnapshot (bool includeCars);
@@ -129,6 +141,9 @@ private:
     std::vector<int>     spawnDropOffOrder;
     int                  nextCarId   = 0;
     bool                 gameOver    = false;
+
+    GameMode             mode = GameMode::classic;
+    float                dropOffShuffleTimer = 0.0f;   // random mode: time to next reshuffle
 
     std::vector<SmokePuff> smoke;
     juce::Point<float>   wind, targetWind;   // length = strength 0..1
@@ -158,6 +173,10 @@ private:
     // consist so one collision only shears it once.
     static constexpr float kRamBreakSpeed  = 4.0f;
     static constexpr float kRamCooldown    = 1.0f;
+    // Random mode: how many drop-offs stay live at once, and roughly how long
+    // between reshuffles (jittered a little so it doesn't feel metronomic).
+    static constexpr int   kRandomActiveDropOffs = 2;
+    static constexpr float kDropOffShufflePeriod = 30.0f;
     static constexpr int   kInitialCars    = 20;
     static constexpr float kBackoffSpeed   = 0.35f;  // gentle jam-escape reverse (× top speed)
 

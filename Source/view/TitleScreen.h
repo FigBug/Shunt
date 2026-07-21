@@ -11,7 +11,7 @@ class TitleScreen : public juce::Component
 public:
     TitleScreen (gin::GameControllerManager& controllers,
                  int initialPlayers = 2, float initialVolume = 1.0f,
-                 int initialMapIndex = 0);
+                 int initialMapIndex = 0, int initialModeIndex = 0);
 
     void paint (juce::Graphics& g) override;
     bool keyPressed (const juce::KeyPress& key) override;
@@ -21,6 +21,7 @@ public:
     int   getNumPlayers()  const noexcept { return numPlayers; }
     float getVolume()      const noexcept { return volume; }
     int   getMapIndex()    const noexcept { return mapIndex; }
+    int   getModeIndex()   const noexcept { return modeIndex; }
     bool  isStartPressed() const noexcept { return startPressed; }
     bool  isExitPressed()  const noexcept { return exitPressed; }
 
@@ -31,6 +32,7 @@ private:
     int   numPlayers   = 2;
     float volume       = 1.0f;
     int   mapIndex     = 0;
+    int   modeIndex    = 0;   // 0 = Classic, 1 = Random
     bool  startPressed = false;
     bool  exitPressed  = false;
 
@@ -41,6 +43,8 @@ private:
     bool prevBumperRight = false;
     bool prevDpadUp      = false;
     bool prevDpadDown    = false;
+    bool prevDpadLeft    = false;
+    bool prevDpadRight   = false;
     bool prevStart       = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TitleScreen)

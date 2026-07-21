@@ -16,13 +16,14 @@ MainComponent::MainComponent()
     savedMapIndex   = settings->getIntValue ("mapIndex", 0);   // remembered from last session
     savedVolume     = settings->getIntValue ("volume", 80) / 100.0f;   // stored as a percentage
     savedNumPlayers = juce::jlimit (2, 4, settings->getIntValue ("numPlayers", savedNumPlayers));
+    savedModeIndex  = juce::jlimit (0, 1, settings->getIntValue ("gameMode", savedModeIndex));
 
     if (auto* m = std::getenv ("SHUNT_MAP"))   // dev hook: preselect a map for testing
         savedMapIndex = juce::String (m).getIntValue();
 
     soundEngine.setVolume (savedVolume);
 
-    titleScreen = std::make_unique<view::TitleScreen> (controllers, savedNumPlayers, savedVolume, savedMapIndex);
+    titleScreen = std::make_unique<view::TitleScreen> (controllers, savedNumPlayers, savedVolume, savedMapIndex, savedModeIndex);
     addAndMakeVisible (*titleScreen);
 
     setWantsKeyboardFocus (true);
@@ -40,16 +41,20 @@ void MainComponent::startGame()
     int numPlayers = titleScreen->getNumPlayers();
     savedNumPlayers = numPlayers;
     savedMapIndex = titleScreen->getMapIndex();
+    savedModeIndex = titleScreen->getModeIndex();
     savedVolume   = titleScreen->getVolume();
     soundEngine.setVolume (savedVolume);
 
-    if (settings != nullptr)   // remember the chosen map, volume and player count for next launch
+    if (settings != nullptr)   // remember the chosen map, mode, volume and player count for next launch
     {
         settings->setValue ("mapIndex", savedMapIndex);
+        settings->setValue ("gameMode", savedModeIndex);
         settings->setValue ("volume", juce::roundToInt (savedVolume * 100.0f));
         settings->setValue ("numPlayers", savedNumPlayers);
         settings->saveIfNeeded();
     }
+
+    auto mode = (savedModeIndex == 1) ? game::GameMode::random : game::GameMode::classic;
 
     bool slotHasController[4] {};
     for (int i = 0; i < 4; ++i)
@@ -58,7 +63,7 @@ void MainComponent::startGame()
     removeChildComponent (titleScreen.get());
     titleScreen.reset();
 
-    state = std::make_unique<game::GameState> (numPlayers, savedMapIndex);
+    state = std::make_unique<game::GameState> (numPlayers, savedMapIndex, mode);
 
     for (int i = 0; i < numPlayers; ++i)
     {
@@ -241,7 +246,7 @@ void MainComponent::returnToTitle()
     hud.reset();
     state.reset();
 
-    titleScreen = std::make_unique<view::TitleScreen> (controllers, savedNumPlayers, savedVolume, savedMapIndex);
+    titleScreen = std::make_unique<view::TitleScreen> (controllers, savedNumPlayers, savedVolume, savedMapIndex, savedModeIndex);
     addAndMakeVisible (*titleScreen);
     resized();
     grabKeyboardFocus();

@@ -39,6 +39,7 @@ private:
     bool                                    endScreenReady = false;
     int                                     savedNumPlayers = 2;
     int                                     savedMapIndex   = 0;
+    int                                     savedModeIndex  = 0;   // 0 = Classic, 1 = Random
     float                                   savedVolume     = 0.8f;
     std::unique_ptr<juce::PropertiesFile>   settings;
 

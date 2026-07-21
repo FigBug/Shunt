@@ -52,7 +52,8 @@ namespace
     }
 }
 
-GameState::GameState (int numPlayers, int mapIndex)
+GameState::GameState (int numPlayers, int mapIndex, GameMode mode_)
+    : mode (mode_)
 {
     const auto& maps = getMaps();
     juce::String jsonStr;
@@ -72,6 +73,9 @@ GameState::GameState (int numPlayers, int mapIndex)
         std::swap (spawnDropOffOrder[(size_t) i],
                    spawnDropOffOrder[(size_t) rng().nextInt (i + 1)]);
 
+    if (mode == GameMode::random)
+        shuffleDropOffs();   // start with a random live set
+
     for (int i = 0; i < numPlayers; ++i)
         spawnAi (i);
 
@@ -87,6 +91,51 @@ GameState::GameState (int numPlayers, int mapIndex)
     }
 
     openLog (numPlayers, mapIndex);
+}
+
+void GameState::shuffleDropOffs()
+{
+    auto& zones = track.getDropOffs();
+    const int n = (int) zones.size();
+
+    // Restart the timer with a little jitter so reshuffles don't feel metronomic.
+    dropOffShuffleTimer = kDropOffShufflePeriod
+                          + (rng().nextFloat() - 0.5f) * 0.4f * kDropOffShufflePeriod;
+
+    if (n == 0) return;
+
+    for (auto& z : zones)
+        z.active = false;
+
+    // Pick which zones go live (a random subset of distinct nodes).
+    std::vector<int> order (n);
+    for (int i = 0; i < n; ++i) order[(size_t) i] = i;
+    for (int i = n - 1; i > 0; --i)
+        std::swap (order[(size_t) i], order[(size_t) rng().nextInt (i + 1)]);
+
+    // Distinct random colours across the live set, cycling all colours when there
+    // are more live zones than colours.
+    const int numColours = (int) CarColour::count;
+    std::vector<int> colours (numColours);
+    for (int i = 0; i < numColours; ++i) colours[(size_t) i] = i;
+    for (int i = numColours - 1; i > 0; --i)
+        std::swap (colours[(size_t) i], colours[(size_t) rng().nextInt (i + 1)]);
+
+    int live = juce::jmin (kRandomActiveDropOffs, n);
+    for (int i = 0; i < live; ++i)
+    {
+        auto& z = zones[(size_t) order[(size_t) i]];
+        z.active = true;
+        z.colourIndex = colours[(size_t) (i % numColours)];
+    }
+}
+
+bool GameState::colourHasActiveDropOff (int colourIndex) const
+{
+    for (const auto& dz : track.getDropOffs())
+        if (dz.active && dz.colourIndex == colourIndex)
+            return true;
+    return false;
 }
 
 GameState::SpawnInfo GameState::spawnPosNearDropOff (int dropOffIndex) const
@@ -389,6 +438,14 @@ void GameState::update (float dt, gin::GameControllerManager& controllers)
 
     for (auto& sw : track.getSwitches())
         sw.cooldown = juce::jmax (0.0f, sw.cooldown - dt);
+
+    // Random mode: move the live drop-offs around on a timer.
+    if (mode == GameMode::random)
+    {
+        dropOffShuffleTimer -= dt;
+        if (dropOffShuffleTimer <= 0.0f)
+            shuffleDropOffs();
+    }
 
     // Work out each train's lined-up switch and ownership before input/AI, so a
     // Y press (and the AI) act on this frame's ring.
@@ -797,6 +854,8 @@ void GameState::checkScoring (Player& p)
 
     for (const auto& dz : track.getDropOffs())
     {
+        if (! dz.active)
+            continue;
         if ((int) p.carryColour != dz.colourIndex)
             continue;
 
@@ -1426,11 +1485,12 @@ float GameState::aiUpdate (Player& p, float dt)
         }
         else
         {
-            bool anyFree = false;
+            bool anyDeliverable = false;
             for (const auto& c : cars)
-                if (c.free) { anyFree = true; break; }
+                if (c.free && colourHasActiveDropOff ((int) c.colour))
+                    { anyDeliverable = true; break; }
 
-            if (anyFree)
+            if (anyDeliverable)
             {
                 brain.state = AiBrain::seekingCar;
                 brain.dirSign = 0;
@@ -1537,6 +1597,8 @@ float GameState::aiUpdate (Player& p, float dt)
                 if (! c.free) continue;
                 if (p.hasColourLock && c.colour != p.carryColour)
                     continue;
+                if (! colourHasActiveDropOff ((int) c.colour))
+                    continue;   // nowhere to deliver it right now — don't bother
                 float d = locoWorld.getDistanceFrom (track.worldPos (c.pos));
 
                 // Always a fallback candidate, even if an engine is in the way —
@@ -1584,6 +1646,8 @@ float GameState::aiUpdate (Player& p, float dt)
     {
         for (const auto& dz : track.getDropOffs())
         {
+            if (! dz.active)
+                continue;
             if (dz.colourIndex == (int) p.carryColour)
             {
                 int dzNode = dz.node;
@@ -1602,8 +1666,16 @@ float GameState::aiUpdate (Player& p, float dt)
             }
         }
 
+        // No live drop-off wants this colour (random mode) — don't haul it around.
+        // Drop the whole consist and go look for a car we can actually deliver.
         if (! hasTarget)
+        {
+            decoupleAll (p, p.speed);
+            brain.state = AiBrain::seekingCar;
+            brain.targetCarId = -1;
+            brain.path.clear();
             return 0.0f;
+        }
 
         // If another engine is sitting on the way to (or in) the drop-off,
         // there's no alternative destination — hold position and wait for it to

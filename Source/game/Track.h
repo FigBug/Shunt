@@ -68,9 +68,10 @@ public:
     void addCrossing (int node, int a1, int a2, int b1, int b2);
     void addSiding (int slot, int segment, int bufferNode, int switchNode);
 
-    struct DropOffZone { int colourIndex = 0; int node = 0; };
+    struct DropOffZone { int colourIndex = 0; int node = 0; bool active = true; };
     void addDropOff (int colourIndex, int node);
     const std::vector<DropOffZone>& getDropOffs() const { return dropOffs; }
+    std::vector<DropOffZone>&       getDropOffs()       { return dropOffs; }
 
     void addSpawn (juce::Point<float> pos, int colour);
     const std::vector<SpawnPoint>& getSpawns() const { return spawns; }
