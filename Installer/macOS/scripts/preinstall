@@ -1,4 +1,5 @@
 #!/bin/sh
 # Remove any prior install so the new bundle takes its place cleanly.
 rm -Rf "/Applications/Shunt.app"
+rm -Rf "/Applications/Shunt Level Editor.app"
 exit 0
