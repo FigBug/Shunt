@@ -17,7 +17,7 @@ jobs:
       matrix:
         include:
           - name: Windows
-            os:  windows-2022
+            os:  windows-latest
           - name: Linux
             os:  ubuntu-latest
           - name: macOS
